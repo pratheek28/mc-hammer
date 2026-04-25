@@ -10,7 +10,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:mc-hammer.helloWorld"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -18,8 +18,20 @@
       {
         "command": "mc-hammer.helloWorld",
         "title": "Hello World"
+      },
+      {
+        "command": "mc-hammer.overlayRunWhichPython3",
+        "title": "MC HAMMER: HAMMER TIME🔨"
       }
-    ]
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "mc-hammer.overlayRunWhichPython3",
+          "group": "navigation@100"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

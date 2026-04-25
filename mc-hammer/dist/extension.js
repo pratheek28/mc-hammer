@@ -66,7 +66,15 @@ function activate(context) {
   const disposable = vscode.commands.registerCommand("mc-hammer.helloWorld", () => {
     vscode.window.showInformationMessage("Hello people from mc-hammer!");
   });
-  context.subscriptions.push(disposable);
+  const overlayRunCommand = vscode.commands.registerCommand("mc-hammer.overlayRunWhichPython3", async () => {
+    await runApprovedCommand("which python3");
+  });
+  const overlayButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1e3);
+  overlayButton.text = "MC HAMMER: HAMMER TIME\u{1F528}";
+  overlayButton.tooltip = "Run approved command: which python3";
+  overlayButton.command = "mc-hammer.overlayRunWhichPython3";
+  overlayButton.show();
+  context.subscriptions.push(disposable, overlayRunCommand, overlayButton);
 }
 function deactivate() {
   hammerTerminal?.dispose();

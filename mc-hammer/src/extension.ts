@@ -42,7 +42,18 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage('Hello people from mc-hammer!');
     });
 
-    context.subscriptions.push(disposable);
+    const overlayRunCommand = vscode.commands.registerCommand('mc-hammer.overlayRunWhichPython3', async () => {
+        await runApprovedCommand('which python3');
+    });
+
+    // A persistent clickable button in the VS Code UI.
+    const overlayButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
+    overlayButton.text = 'MC HAMMER: HAMMER TIME🔨';
+    overlayButton.tooltip = 'Run approved command: which python3';
+    overlayButton.command = 'mc-hammer.overlayRunWhichPython3';
+    overlayButton.show();
+
+    context.subscriptions.push(disposable, overlayRunCommand, overlayButton);
 }
 
 export function deactivate() {
