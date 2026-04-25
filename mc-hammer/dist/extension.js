@@ -38,25 +38,39 @@ module.exports = __toCommonJS(extension_exports);
 var vscode = __toESM(require("vscode"));
 var cp = __toESM(require("child_process"));
 async function getConflictedFunctions() {
-  const cwd = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  console.log("[MC Hammer] workspaceFolders:", workspaceFolders?.map((f) => f.uri.fsPath));
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    vscode.window.showErrorMessage("MC Hammer: No workspace folder is open.");
+    return {};
+  }
+  const cwd = workspaceFolders[0].uri.fsPath;
+  console.log("[MC Hammer] cwd:", cwd);
   const result = {};
   return new Promise((resolve) => {
     cp.exec("git diff --name-only --diff-filter=U", { cwd }, async (err, stdout) => {
+      console.log("[MC Hammer] git diff err:", err);
+      console.log("[MC Hammer] git diff stdout:", stdout);
       if (err || !stdout.trim()) {
+        console.log("[MC Hammer] early exit - no conflicts or git error");
         resolve(result);
         return;
       }
       const conflictedFiles = stdout.trim().split("\n").filter((f) => f.endsWith(".py"));
+      console.log("[MC Hammer] conflicted python files:", conflictedFiles);
       for (const filePath of conflictedFiles) {
         const fullPath = `${cwd}/${filePath}`;
+        console.log("[MC Hammer] scanning file:", fullPath);
         const doc = await vscode.workspace.openTextDocument(fullPath);
         const lines = doc.getText().split("\n");
         const functions = [];
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].startsWith("<<<<<<<")) {
+            console.log("[MC Hammer] conflict marker found at line", i);
             for (let j = i; j >= 0; j--) {
               if (lines[j].trimStart().startsWith("def ")) {
                 const funcName = lines[j].trim().split("(")[0].replace("def ", "");
+                console.log("[MC Hammer] enclosing function found:", funcName);
                 if (!functions.includes(funcName)) {
                   functions.push(funcName);
                 }
@@ -65,10 +79,12 @@ async function getConflictedFunctions() {
             }
           }
         }
+        console.log("[MC Hammer] functions with conflicts in", filePath, ":", functions);
         if (functions.length > 0) {
           result[filePath] = functions;
         }
       }
+      console.log("[MC Hammer] final result:", JSON.stringify(result, null, 2));
       resolve(result);
     });
   });
@@ -140,7 +156,9 @@ function activate(context) {
     vscode.window.showInformationMessage("Hello! from mc-hammer!");
   });
   const hammerButton = vscode.commands.registerCommand("mc-hammer.buttonClicked", () => {
-    buttonClicked();
+    buttonClicked().catch((err) => {
+      vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
+    });
   });
   context.subscriptions.push(disposable);
   context.subscriptions.push(hammerButton);
