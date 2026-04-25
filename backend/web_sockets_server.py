@@ -92,6 +92,7 @@ def format_function_context(function_name: str, file_path: str, function_source:
 def send_generate_tests_request(
     node: str,
     ancestors: set[str],
+    commit_message: str,
 ):
     node_info = FUNCTION_INDEX.get(node)
     if node_info is None:
@@ -159,7 +160,7 @@ def send_generate_tests_request(
 
     payload = {
         "file_content": file_content,
-        "commit_message": "testtttting",
+        "commit_message": commit_message,
         "readme_content": readme_content,
         "conflict_functions": conflict_functions,
         "ancestor_functions_other_files": dependent_functions_other_files,
@@ -183,6 +184,8 @@ def send_generate_tests_request(
 def send_generate_merge_request(
     node: str,
     ancestors: set[str],
+    remote_content: str,
+    current_content: str,
 ):
     node_info = FUNCTION_INDEX.get(node)
     if node_info is None:
@@ -250,8 +253,8 @@ def send_generate_merge_request(
 
     payload = {
         "file_content": file_content,
-        "commit_message_a": "testtttting",
-        "commit_message_b": "testtttting",
+        "commit_message_a": remote_content,
+        "commit_message_b": current_content,
         "conflict_functions": conflict_functions,
         "ancestor_functions_other_files": dependent_functions_other_files,
     }
@@ -423,25 +426,39 @@ def to_react_flow(G: nx.DiGraph) -> dict:
     ]
     return {"nodes": nodes, "edges": edges}
 
+
+
+
 async def handler(websocket):
     payload_raw = await websocket.recv()
-    pwd = payload_raw
-    conflicted_functions = await websocket.recv()
-    conflicted_functions = json.loads(conflicted_functions)  
-    target_function = "make_response"
     direct_only = False
+    pwd = ""
+    conflicted_functions = ""
+    target_function = ""
+    curr = ""
+    remote = ""
+    commit = ""
 
     # Backward compatible:
     # - If payload is a plain string, treat it as project path.
-    # - If payload is JSON, support path + target function selection.
-    try:
-        payload = json.loads(payload_raw)
-        if isinstance(payload, dict):
-            pwd = payload.get("path", pwd)
-            target_function = payload.get("targetFunction", target_function)
-            direct_only = bool(payload.get("directOnly", direct_only))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        pass
+    # - If payload is JSON, support both old keys and extension "t*" keys.
+    payload = payload_raw
+    if isinstance(payload_raw, str):
+        try:
+            payload = json.loads(payload_raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = payload_raw
+
+    if isinstance(payload, dict):
+        pwd = payload.get("pwd", payload.get("tpwd", payload.get("path", "")))
+        conflicted_functions = payload.get("conflicted_functions", payload.get("tconflictedFunctions", ""))
+        target_function = payload.get("target_function", payload.get("ttargetFunction", payload.get("targetFunction", "")))
+        curr = payload.get("curr", payload.get("tcurr", ""))
+        remote = payload.get("remote", payload.get("tremote", ""))
+        commit = payload.get("commit", payload.get("tcommit", ""))
+        direct_only = bool(payload.get("direct_only", payload.get("directOnly", direct_only)))
+    elif isinstance(payload, str):
+        pwd = payload
 
     await websocket.send(json.dumps({"type": "ack", "message": "Building graph..."}))
 

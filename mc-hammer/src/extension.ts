@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
+import { promises as fs } from 'fs';
 
 let hammerTerminal: vscode.Terminal | undefined;
 let reactTerminal: vscode.Terminal | undefined;
@@ -23,7 +24,63 @@ async function buttonClicked() {
         `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(', ')}`
     );
 
-    sendToBackend(JSON.stringify(conflictedFunctions)); 
+    const targetFunction = Object.keys(conflictedFunctions)[0] ?? "";
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    if (!targetFunction || !workspacePath) {
+        sendToBackend("", JSON.stringify(conflictedFunctions), targetFunction, "", "", "");
+        return;
+    }
+
+    const [remote, curr, commit] = await Promise.all([
+        getRemoteFileContent(workspacePath, targetFunction),
+        getCurrentFileContent(workspacePath, targetFunction),
+        getLatestMainCommitMessage(workspacePath)
+    ]);
+
+    sendToBackend("", JSON.stringify(conflictedFunctions), targetFunction, curr, remote, commit);
+}
+
+function execInWorkspace(command: string, cwd: string): Promise<string> {
+    return new Promise((resolve) => {
+        cp.exec(command, { cwd }, (err, stdout) => {
+            if (err) {
+                resolve("");
+                return;
+            }
+            resolve(stdout);
+        });
+    });
+}
+
+function quoteForShell(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+async function getRemoteFileContent(cwd: string, filePath: string): Promise<string> {
+    const quotedPath = quoteForShell(filePath);
+    // Try the exact command shape requested first, then fallback to canonical git syntax.
+    const requestedCommand = `git show origin main:${quotedPath}`;
+    const requestedOutput = await execInWorkspace(requestedCommand, cwd);
+    if (requestedOutput.trim()) {
+        return requestedOutput;
+    }
+
+    const canonicalCommand = `git show origin/main:${quotedPath}`;
+    return execInWorkspace(canonicalCommand, cwd);
+}
+
+async function getCurrentFileContent(cwd: string, filePath: string): Promise<string> {
+    const absolutePath = path.join(cwd, filePath);
+    try {
+        return await fs.readFile(absolutePath, 'utf8');
+    } catch {
+        return "";
+    }
+}
+
+function getLatestMainCommitMessage(cwd: string): Promise<string> {
+    return execInWorkspace('git log main -1 --pretty=%B', cwd);
 }
 
 // uses git diff to get list of conflicted python files, then scans each file
@@ -100,7 +157,40 @@ function getTerminal(): vscode.Terminal {
     return hammerTerminal;
 }
 
-function sendToBackend(data: string) {
+let tpwd="";
+let tconflictedFunctions="";
+let ttargetFunction="";
+let tcurr="";
+let tremote="";
+let tcommit="";
+
+function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction: string, curr: string, remote: string, commit: string) {
+    if (pwd != "") {
+        tpwd = pwd;
+    }
+    if (conflictedFunctions != "") {
+        tconflictedFunctions = conflictedFunctions;
+    }
+    if (targetFunction != "") {
+        ttargetFunction = targetFunction;
+    }
+    if (curr != "") {
+        tcurr = curr;
+    }
+    if (remote != "") {
+        tremote = remote;
+    }
+    if (commit != "") {
+        tcommit = commit;
+    }
+    const data = JSON.stringify({
+        pwd: tpwd,
+        conflicted_functions: tconflictedFunctions,
+        target_function: ttargetFunction,
+        curr: tcurr,
+        remote: tremote,
+        commit: tcommit
+    });
     if (socket.readyState === WebSocket.OPEN) {
         socket.send(data);
     }else {
@@ -146,7 +236,7 @@ export async function runApprovedCommand(command: string, context: vscode.Extens
         if (dir) {
             vscode.env.clipboard.writeText(dir);
             vscode.window.showInformationMessage(`Copied dir: ${dir}`);
-            sendToBackend(dir);
+            sendToBackend(dir, "", "", "", "", "");
             vscode.window.showInformationMessage('Sent directory to backend!');
             startReactAndPreview(context);
         }else {
