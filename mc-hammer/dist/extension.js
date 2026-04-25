@@ -31,22 +31,50 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var extension_exports = {};
 __export(extension_exports, {
   activate: () => activate,
-  deactivate: () => deactivate
+  deactivate: () => deactivate,
+  runApprovedCommand: () => runApprovedCommand
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode = __toESM(require("vscode"));
+var hammerTerminal;
+function getTerminal() {
+  if (!hammerTerminal || hammerTerminal.exitStatus !== void 0) {
+    hammerTerminal = vscode.window.createTerminal("MC Hammer");
+  }
+  return hammerTerminal;
+}
+async function runApprovedCommand(command) {
+  const result = await vscode.window.showInformationMessage(
+    `MC Hammer wants to run: ${command}`,
+    { modal: true },
+    "Run it",
+    "Reject"
+  );
+  if (result === "Run it") {
+    const terminal = getTerminal();
+    terminal.show();
+    terminal.sendText(command);
+    return "ran";
+  }
+  if (result === "Reject") {
+    return "rejected";
+  }
+  return "dismissed";
+}
 function activate(context) {
   console.log('Congratulations, your extension "mc-hammer" is now active!');
   const disposable = vscode.commands.registerCommand("mc-hammer.helloWorld", () => {
-    vscode.window.showInformationMessage("Hello World from mc-hammer!");
+    vscode.window.showInformationMessage("Hello people from mc-hammer!");
   });
   context.subscriptions.push(disposable);
 }
 function deactivate() {
+  hammerTerminal?.dispose();
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   activate,
-  deactivate
+  deactivate,
+  runApprovedCommand
 });
 //# sourceMappingURL=extension.js.map

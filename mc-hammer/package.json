@@ -9,7 +9,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": ["onCommand:mc-hammer.helloWorld"],
+  "activationEvents": [
+    "onCommand:mc-hammer.helloWorld"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -35,7 +37,7 @@
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
-    "@types/node": "22.x",
+    "@types/node": "^22.19.17",
     "@types/vscode": "^1.116.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
