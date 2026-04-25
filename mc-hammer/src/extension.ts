@@ -39,7 +39,7 @@ export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "mc-hammer" is now active!');
 
     const disposable = vscode.commands.registerCommand('mc-hammer.helloWorld', () => {
-        vscode.window.showInformationMessage('Hello people from mc-hammer!');
+        vscode.window.showInformationMessage('Hello! from mc-hammer!');
     });
 
     context.subscriptions.push(disposable);
