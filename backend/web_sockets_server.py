@@ -196,6 +196,9 @@ def to_react_flow(G: nx.DiGraph) -> dict:
 async def handler(websocket):
     global graph_data
     pwd = await websocket.recv()
+    conflicted_functions = await websocket.recv()
+    conflicted_functions = json.loads(conflicted_functions)  
+    
     G = build_dependency_graph(Path(pwd))
     T = get_subgraph(G, "get_all_files", direct_only=True)
     graph_data = to_react_flow(T)

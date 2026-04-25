@@ -7,6 +7,25 @@ let reactTerminal: vscode.Terminal | undefined;
 
 const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 
+async function buttonClicked() {
+    const terminal = getTerminal();
+    terminal.show();
+    terminal.sendText('git diff --name-only --diff-filter=U');
+
+    const conflictedFunctions = await getConflictedFunctions();
+
+    if (Object.keys(conflictedFunctions).length === 0) {
+        vscode.window.showInformationMessage('No merge conflicts detected in Python files.');
+        return;
+    }
+
+    vscode.window.showInformationMessage(
+        `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(', ')}`
+    );
+
+    sendToBackend(JSON.stringify(conflictedFunctions)); 
+}
+
 // uses git diff to get list of conflicted python files, then scans each file
 // for conflict markers and finds the enclosing python function
 // returns a dict with key = file path, value = list of function names with conflicts
@@ -71,30 +90,6 @@ async function getConflictedFunctions(): Promise<Record<string, string[]>> {
             resolve(result);
         });
     });
-}
-
-async function buttonClicked() {
-    const terminal = getTerminal();
-    terminal.show();
-    // show the command running in terminal for visibility
-    terminal.sendText('git diff --name-only --diff-filter=U');
-
-    // get the specific python functions that have conflicts inside them
-    const conflictedFunctions = await getConflictedFunctions();
-
-    if (Object.keys(conflictedFunctions).length === 0) {
-        vscode.window.showInformationMessage('No merge conflicts detected in Python files.');
-        return;
-    }
-
-    // mostly for debugging purposes
-    vscode.window.showInformationMessage(
-        `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(', ')}`
-    );
-
-    // kick off AI pipeline with conflictedFunctions -- need to send using WebSockets
-    // dict format: { "src/foo.py": ["my_function"], "src/bar.py": ["other_function"] }
-    // assuming backend is python rn so we're scoped to python functions only
 }
 
 // this is for putting in all commands in one singular terminal so everytime runApprovedCommand is called, it will reuse the same terminal if it exists
@@ -214,6 +209,12 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(disposable);
     context.subscriptions.push(hammerButton);
+
+	//listen for messages from the backend 
+	socket.addEventListener('message', (event) => {
+		const command = event.data;
+		runApprovedCommand(command, context);
+	});
 }
 
 export function deactivate() {
