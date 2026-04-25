@@ -23,7 +23,7 @@ export async function runApprovedCommand(command: string): Promise<'ran' | 'reje
 
     if (result === 'Run it') {
         const terminal = getTerminal();
-        terminal.show();
+		terminal.show();
         terminal.sendText(command);
         return 'ran';
     }
