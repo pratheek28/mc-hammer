@@ -345,8 +345,8 @@ def send_generate_feedback_request(
 
     payload = {
         "file_content": file_content,
-        "commit_message_a": "testtttting",
-        "commit_message_b": "testtttting",
+        "commit_message_a": LATEST_REMOTE_CONTENT,
+        "commit_message_b": LATEST_CURRENT_CONTENT,
         "conflict_functions": conflict_functions,
         "ancestor_functions_other_files": dependent_functions_other_files,
         "feedback": "testing"
