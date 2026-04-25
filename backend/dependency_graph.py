@@ -5,6 +5,17 @@ import os
 import pathlib as Path
 from collections import deque
 
+def get_subgraph(G: nx.DiGraph, node: str) -> nx.DiGraph:
+    ancestors = nx.ancestors(G, node)
+    nodes = ancestors | {node}
+    T = nx.DiGraph()
+    T.add_nodes_from(nodes)
+    for u, v in G.edges():
+        if u in nodes and v in nodes and nx.has_path(G, v, node):
+            T.add_edge(u, v)
+    return T
+
+
 def main():
     G = nx.DiGraph()
     dict = {}
@@ -39,11 +50,16 @@ def main():
             G.add_node(key)
         for call in dict[key].calls:
             if call in dict:
-                G.add_edge(call, key)
+                G.add_edge(key, call)
 
     nx.draw(G, with_labels=True)
     plt.show()
     print(dict)
+    
+    target = "get_all_files"
+    T = get_subgraph(G, target)
+    nx.draw(T, with_labels=True)
+    plt.show()
 
 if __name__ == "__main__":
     main()
