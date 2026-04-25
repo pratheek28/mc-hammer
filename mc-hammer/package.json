@@ -24,6 +24,15 @@
         "title": "MC HAMMER: HAMMER TIME🔨"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "type": "webview",
+          "id": "mc-hammer.conflictPetView",
+          "name": "MC Hammer Pet"
+        }
+      ]
+    },
     "menus": {
       "editor/title": [
         {

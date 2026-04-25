@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
+import { ConflictPetViewProvider } from './conflictPetView';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -29,22 +30,6 @@ function sendToBackend(data: string) {
 }
 
 // ─── Conflict Detection ───────────────────────────────────────────────────────
-
-// Opens a document and shows/hides the status bar item based on conflict markers
-async function checkDocumentForConflicts(
-    uri: vscode.Uri,
-    conflictStatusBar: vscode.StatusBarItem
-) {
-    const doc = await vscode.workspace.openTextDocument(uri);
-    if (doc.getText().includes('<<<<<<<')) {
-        conflictStatusBar.show();
-        vscode.window.showInformationMessage(
-            `MC Hammer detected a merge conflict in ${uri.fsPath}`
-        );
-    } else {
-        conflictStatusBar.hide();
-    }
-}
 
 // Uses git diff to get conflicted Python files, then scans each for conflict
 // markers and finds the enclosing function.
@@ -171,7 +156,7 @@ export async function runApprovedCommand(
 
 // ─── Button Handler ───────────────────────────────────────────────────────────
 
-async function buttonClicked() {
+async function buttonClicked(conflictStatusBar: vscode.StatusBarItem, conflictPetViewProvider: ConflictPetViewProvider,) {
     const terminal = getTerminal();
     terminal.show();
     terminal.sendText('git diff --name-only --diff-filter=U');
@@ -179,10 +164,17 @@ async function buttonClicked() {
     const conflictedFunctions = await getConflictedFunctions();
 
     if (Object.keys(conflictedFunctions).length === 0) {
+		conflictStatusBar.color = new vscode.ThemeColor('statusBar.debuggingForeground');
+        conflictStatusBar.text = '$(check) 🔨 No Merge Conflicts';
+        conflictStatusBar.backgroundColor = undefined;
         vscode.window.showInformationMessage('No merge conflicts detected in Python files.');
+		conflictPetViewProvider.setConflictState(false);
         return;
     }
 
+    conflictStatusBar.text = '$(warning) 🔨 Merge Conflict Detected';
+	conflictPetViewProvider.setConflictState(true);
+    conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     vscode.window.showInformationMessage(
         `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(', ')}`
     );
@@ -195,37 +187,41 @@ async function buttonClicked() {
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "mc-hammer" is now active!');
 
-    // Status bar item — hidden until a conflict is detected
+    // Status bar item — always visible, starts green until a conflict is found
     const conflictStatusBar = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left,
         100
     );
-    conflictStatusBar.text = '🔨 MC Hammer: Merge Conflict Detected';
-    conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    conflictStatusBar.text = '$(check) 🔨 No Merge Conflicts';
+    conflictStatusBar.backgroundColor = undefined;
     conflictStatusBar.command = 'mc-hammer.buttonClicked';
     conflictStatusBar.tooltip = 'Click to run MC Hammer on merge conflicts';
-    conflictStatusBar.hide();
+    conflictStatusBar.show();
     context.subscriptions.push(conflictStatusBar);
 
-    // Scan all already-open Python files at activation time
-    const openDocs = vscode.workspace.textDocuments.filter(d => d.fileName.endsWith('.py'));
-    for (const doc of openDocs) {
-        checkDocumentForConflicts(doc.uri, conflictStatusBar);
-    }
+	const conflictPetViewProvider = new ConflictPetViewProvider(context.extensionUri);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(
+			ConflictPetViewProvider.viewType,
+			conflictPetViewProvider,
+		),
+	);
+	conflictPetViewProvider.setConflictState(false);
 
-    // Watch for Python files being saved/changed on disk
+    // watch for merge conflicts appearing in python files automatically
     const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');
-    watcher.onDidChange(uri => checkDocumentForConflicts(uri, conflictStatusBar));
+    watcher.onDidChange(async (uri) => {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        if (doc.getText().includes('<<<<<<<')) {
+            conflictStatusBar.text = '$(warning) 🔨 Merge Conflict Detected';
+            conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+			conflictPetViewProvider.setConflictState(true);
+            vscode.window.showInformationMessage(
+                `MC Hammer detected a merge conflict in ${uri.fsPath}`
+            );
+        }
+    });
     context.subscriptions.push(watcher);
-
-    // Also check when a Python file is newly opened in the editor
-    context.subscriptions.push(
-        vscode.workspace.onDidOpenTextDocument(doc => {
-            if (doc.fileName.endsWith('.py')) {
-                checkDocumentForConflicts(doc.uri, conflictStatusBar);
-            }
-        })
-    );
 
     // Commands
     context.subscriptions.push(
@@ -236,10 +232,10 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('mc-hammer.buttonClicked', () => {
-            buttonClicked().catch(err => {
-                vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
-            });
-        })
+			buttonClicked(conflictStatusBar, conflictPetViewProvider).catch(err => {
+				vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
+			});
+		})
     );
 }
 
