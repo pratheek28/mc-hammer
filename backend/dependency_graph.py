@@ -30,13 +30,15 @@ def main():
             print(f"  Params: {fn.params}")
             print(f"  Returns: {fn.return_annotation}")
             print(f"  Calls: {fn.calls}")
+            print(f"Line number: {fn.lineno}")
 
     keys = list(dict.keys())
 
     for key in keys:
-        G.add_node(key)
+        if key not in G:
+            G.add_node(key)
         for call in dict[key].calls:
-            if dict.get(call) is not None:
+            if call in dict:
                 G.add_edge(call, key)
 
     nx.draw(G, with_labels=True)
