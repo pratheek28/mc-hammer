@@ -38,6 +38,7 @@ module.exports = __toCommonJS(extension_exports);
 var vscode2 = __toESM(require("vscode"));
 var cp = __toESM(require("child_process"));
 var path = __toESM(require("path"));
+var import_fs = require("fs");
 
 // src/conflictPetView.ts
 var vscode = __toESM(require("vscode"));
@@ -70,6 +71,7 @@ var ConflictPetViewProvider = class {
       vscode.Uri.joinPath(this.extensionUri, "media", gifPath)
     );
     const label = hasConflict ? "Merge conflict detected" : "No merge conflict";
+    const petClass = hasConflict ? "pet" : "pet pet-felix";
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -96,7 +98,9 @@ var ConflictPetViewProvider = class {
             width: min(100%, 220px);
             height: auto;
             object-fit: contain;
-            border-radius: 8px;
+        }
+        .pet-felix {
+            width: min(100%, 340px);
         }
         .status {
             font-size: 12px;
@@ -106,8 +110,8 @@ var ConflictPetViewProvider = class {
     </style>
 </head>
 <body>
-    <img class="pet" src="${gifUri}" alt="${label}" />
-    <div class="status">${hasConflict ? "$(warning) Merge Conflict Detected" : "$(check) No Merge Conflicts"}</div>
+    <img class="${petClass}" src="${gifUri}" alt="${label}" />
+    <div class="status">${hasConflict ? "Merge Conflict Detected" : "No Merge Conflicts"}</div>
 </body>
 </html>`;
   }
@@ -116,19 +120,93 @@ var ConflictPetViewProvider = class {
 // src/extension.ts
 var hammerTerminal;
 var reactTerminal;
+var conflictStatusBar = null;
+var conflictPetViewProvider = null;
 var socket = new WebSocket("ws://127.0.0.1:8765");
-function getTerminal() {
-  if (!hammerTerminal || hammerTerminal.exitStatus !== void 0) {
-    hammerTerminal = vscode2.window.createTerminal("MC Hammer");
+async function buttonClicked(conflictStatusBar2, conflictPetViewProvider2) {
+  const terminal = getTerminal();
+  terminal.show();
+  terminal.sendText("git diff --name-only --diff-filter=U");
+  const conflictedFunctions = await getConflictedFunctions();
+  if (Object.keys(conflictedFunctions).length === 0) {
+    if (conflictStatusBar2) {
+      conflictStatusBar2.color = new vscode2.ThemeColor("statusBar.debuggingForeground");
+      conflictStatusBar2.text = "$(check) \u{1F528} No Merge Conflicts";
+      conflictStatusBar2.backgroundColor = void 0;
+    }
+    vscode2.window.showInformationMessage("No merge conflicts detected in Python files.");
+    if (conflictPetViewProvider2) {
+      conflictPetViewProvider2.setConflictState(false);
+    }
+    return;
   }
-  return hammerTerminal;
-}
-function sendToBackend(data) {
-  if (socket.readyState === WebSocket.OPEN) {
-    socket.send(data);
+  if (conflictStatusBar2) {
+    conflictStatusBar2.text = "$(warning) \u{1F528} Merge Conflict Detected";
+    conflictStatusBar2.backgroundColor = new vscode2.ThemeColor("statusBarItem.errorBackground");
+  }
+  if (conflictPetViewProvider2) {
+    conflictPetViewProvider2.setConflictState(true);
+  }
+  vscode2.window.showInformationMessage(
+    `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(", ")}`
+  );
+  const targetFunctionFile = Object.keys(conflictedFunctions)[0] ?? "";
+  const targetFunction = conflictedFunctions[targetFunctionFile];
+  const workspacePath = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!targetFunctionFile || !workspacePath) {
+    vscode2.window.showErrorMessage("MC Hammer: Could not determine target function or workspace path.");
+    return;
+  }
+  const [remote, curr, commit] = await Promise.all([
+    getRemoteFileContent(workspacePath, targetFunctionFile),
+    getCurrentFileContent(workspacePath, targetFunctionFile),
+    getLatestMainCommitMessage(workspacePath)
+  ]);
+  if (!remote || !curr || !commit) {
+    vscode2.window.showErrorMessage("MC Hammer: Could not retrieve all required data. Aborting send.");
+    return;
+  }
+  const dir = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (dir) {
   } else {
-    socket.addEventListener("open", () => socket.send(data), { once: true });
+    vscode2.window.showErrorMessage("MC Hammer: Could not retrieve working directory. Aborting...");
+    return;
   }
+}
+function execInWorkspace(command, cwd) {
+  return new Promise((resolve) => {
+    cp.exec(command, { cwd }, (err, stdout) => {
+      if (err) {
+        resolve("");
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+function quoteForShell(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+async function getRemoteFileContent(cwd, filePath) {
+  const quotedPath = quoteForShell(filePath);
+  const requestedCommand = `git show origin main:${quotedPath}`;
+  const requestedOutput = await execInWorkspace(requestedCommand, cwd);
+  if (requestedOutput.trim()) {
+    return requestedOutput;
+  }
+  const canonicalCommand = `git show origin/main:${quotedPath}`;
+  return execInWorkspace(canonicalCommand, cwd);
+}
+async function getCurrentFileContent(cwd, filePath) {
+  const absolutePath = path.join(cwd, filePath);
+  try {
+    return await import_fs.promises.readFile(absolutePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+function getLatestMainCommitMessage(cwd) {
+  return execInWorkspace("git log main -1 --pretty=%B", cwd);
 }
 async function getConflictedFunctions() {
   const workspaceFolders = vscode2.workspace.workspaceFolders;
@@ -182,6 +260,28 @@ async function getConflictedFunctions() {
     });
   });
 }
+function getTerminal() {
+  if (!hammerTerminal || hammerTerminal.exitStatus !== void 0) {
+    hammerTerminal = vscode2.window.createTerminal("MC Hammer");
+  }
+  return hammerTerminal;
+}
+function sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit) {
+  const data = JSON.stringify({
+    pwd,
+    conflicted_functions: conflictedFunctions,
+    target_function: targetFunction,
+    curr,
+    remote,
+    commit,
+    direct_only: true
+  });
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(data);
+  } else {
+    socket.addEventListener("open", () => socket.send(data), { once: true });
+  }
+}
 function startReactAndPreview(context) {
   if (!reactTerminal || reactTerminal.exitStatus !== void 0) {
     const dependencyGraphUIPath = path.join(context.extensionPath, "dependency-graph-ui");
@@ -192,30 +292,22 @@ function startReactAndPreview(context) {
     reactTerminal.sendText("npm run dev");
   }
   setTimeout(() => {
-    vscode2.commands.executeCommand("simpleBrowser.show", "http://localhost:5173");
+    vscode2.commands.executeCommand(
+      "simpleBrowser.show",
+      "http://localhost:5173"
+    );
   }, 4e3);
 }
-async function runApprovedCommand(command, context) {
+async function runApprovedCommand(context, pwd, conflictedFunctions, targetFunction, curr, remote, commit) {
   const result = await vscode2.window.showInformationMessage(
-    `MC Hammer wants to run: ${command}`,
+    `MC Hammer wants to work its magic}`,
     { modal: true },
     "Run it",
     "Reject"
   );
   if (result === "Run it") {
-    const terminal = getTerminal();
-    terminal.show();
-    terminal.sendText(command);
-    const dir = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (dir) {
-      vscode2.env.clipboard.writeText(dir);
-      vscode2.window.showInformationMessage(`Copied dir: ${dir}`);
-      sendToBackend(dir);
-      vscode2.window.showInformationMessage("Sent directory to backend!");
-      startReactAndPreview(context);
-    } else {
-      vscode2.window.showInformationMessage("Failed");
-    }
+    sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit);
+    startReactAndPreview(context);
     return "ran";
   }
   if (result === "Reject") {
@@ -223,30 +315,9 @@ async function runApprovedCommand(command, context) {
   }
   return "dismissed";
 }
-async function buttonClicked(conflictStatusBar, conflictPetViewProvider) {
-  const terminal = getTerminal();
-  terminal.show();
-  terminal.sendText("git diff --name-only --diff-filter=U");
-  const conflictedFunctions = await getConflictedFunctions();
-  if (Object.keys(conflictedFunctions).length === 0) {
-    conflictStatusBar.color = new vscode2.ThemeColor("statusBar.debuggingForeground");
-    conflictStatusBar.text = "$(check) \u{1F528} No Merge Conflicts";
-    conflictStatusBar.backgroundColor = void 0;
-    vscode2.window.showInformationMessage("No merge conflicts detected in Python files.");
-    conflictPetViewProvider.setConflictState(false);
-    return;
-  }
-  conflictStatusBar.text = "$(warning) \u{1F528} Merge Conflict Detected";
-  conflictPetViewProvider.setConflictState(true);
-  conflictStatusBar.backgroundColor = new vscode2.ThemeColor("statusBarItem.errorBackground");
-  vscode2.window.showInformationMessage(
-    `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(", ")}`
-  );
-  sendToBackend(JSON.stringify(conflictedFunctions));
-}
 function activate(context) {
   console.log('Congratulations, your extension "mc-hammer" is now active!');
-  const conflictStatusBar = vscode2.window.createStatusBarItem(
+  conflictStatusBar = vscode2.window.createStatusBarItem(
     vscode2.StatusBarAlignment.Left,
     100
   );
@@ -256,7 +327,7 @@ function activate(context) {
   conflictStatusBar.tooltip = "Click to run MC Hammer on merge conflicts";
   conflictStatusBar.show();
   context.subscriptions.push(conflictStatusBar);
-  const conflictPetViewProvider = new ConflictPetViewProvider(context.extensionUri);
+  conflictPetViewProvider = new ConflictPetViewProvider(context.extensionUri);
   context.subscriptions.push(
     vscode2.window.registerWebviewViewProvider(
       ConflictPetViewProvider.viewType,
@@ -264,24 +335,38 @@ function activate(context) {
     )
   );
   conflictPetViewProvider.setConflictState(false);
-  const watcher = vscode2.workspace.createFileSystemWatcher("**/*.py");
-  watcher.onDidChange(async (uri) => {
-    const doc = await vscode2.workspace.openTextDocument(uri);
-    if (doc.getText().includes("<<<<<<<")) {
-      conflictStatusBar.text = "$(warning) \u{1F528} Merge Conflict Detected";
-      conflictStatusBar.backgroundColor = new vscode2.ThemeColor("statusBarItem.errorBackground");
-      conflictPetViewProvider.setConflictState(true);
-      vscode2.window.showInformationMessage(
-        `MC Hammer detected a merge conflict in ${uri.fsPath}`
+  const gitExtension = vscode2.extensions.getExtension("vscode.git")?.exports;
+  if (gitExtension) {
+    const git = gitExtension.getAPI(1);
+    const attachToRepo = (repo) => {
+      context.subscriptions.push(
+        repo.state.onDidChange(() => {
+          const hasConflict = repo.state.mergeChanges.length > 0;
+          if (hasConflict) {
+            if (conflictStatusBar) {
+              conflictStatusBar.text = "$(warning) \u{1F528} Merge Conflict Detected";
+              conflictStatusBar.backgroundColor = new vscode2.ThemeColor("statusBarItem.errorBackground");
+            }
+            if (conflictPetViewProvider) {
+              conflictPetViewProvider.setConflictState(true);
+            }
+          } else {
+            if (conflictStatusBar) {
+              conflictStatusBar.text = "$(check) \u{1F528} No Merge Conflicts";
+              conflictStatusBar.backgroundColor = void 0;
+            }
+            if (conflictPetViewProvider) {
+              conflictPetViewProvider.setConflictState(false);
+            }
+          }
+        })
       );
-    }
-  });
-  context.subscriptions.push(watcher);
-  context.subscriptions.push(
-    vscode2.commands.registerCommand("mc-hammer.helloWorld", () => {
-      vscode2.window.showInformationMessage("Hello! from mc-hammer!");
-    })
-  );
+    };
+    git.repositories.forEach(attachToRepo);
+    context.subscriptions.push(git.onDidOpenRepository(attachToRepo));
+  } else {
+    vscode2.window.showErrorMessage("MC Hammer: Git extension not available.");
+  }
   context.subscriptions.push(
     vscode2.commands.registerCommand("mc-hammer.buttonClicked", () => {
       buttonClicked(conflictStatusBar, conflictPetViewProvider).catch((err) => {

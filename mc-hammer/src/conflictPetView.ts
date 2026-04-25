@@ -42,6 +42,7 @@ export class ConflictPetViewProvider implements vscode.WebviewViewProvider {
         );
         const label = hasConflict ? 'Merge conflict detected' : 'No merge conflict';
 
+        const petClass = hasConflict ? 'pet' : 'pet pet-felix';
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -68,7 +69,9 @@ export class ConflictPetViewProvider implements vscode.WebviewViewProvider {
             width: min(100%, 220px);
             height: auto;
             object-fit: contain;
-            border-radius: 8px;
+        }
+        .pet-felix {
+            width: min(100%, 340px);
         }
         .status {
             font-size: 12px;
@@ -78,8 +81,8 @@ export class ConflictPetViewProvider implements vscode.WebviewViewProvider {
     </style>
 </head>
 <body>
-    <img class="pet" src="${gifUri}" alt="${label}" />
-    <div class="status">${hasConflict ? '$(warning) Merge Conflict Detected' : '$(check) No Merge Conflicts'}</div>
+    <img class="${petClass}" src="${gifUri}" alt="${label}" />
+    <div class="status">${hasConflict ? 'Merge Conflict Detected' : 'No Merge Conflicts'}</div>
 </body>
 </html>`;
     }
