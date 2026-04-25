@@ -16,6 +16,23 @@ except ImportError:
 FUNCTION_INDEX: dict[str, tuple[object, str]] = {}
 graph_queue: asyncio.Queue = asyncio.Queue()
 MAX_AMBIGUOUS_CALLEE_LINKS = 8
+LATEST_COMMIT_MESSAGE = ""
+LATEST_REMOTE_CONTENT = ""
+LATEST_CURRENT_CONTENT = ""
+LATEST_GENERATED_TESTCASES = None
+
+
+def _parse_conflicted_functions(value) -> dict[str, list[str]]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+    return {}
 
 
 def build_dependency_graph(root: Path):
@@ -93,6 +110,103 @@ def send_generate_tests_request(
     node: str,
     ancestors: set[str],
 ):
+    global LATEST_GENERATED_TESTCASES
+    node_info = FUNCTION_INDEX.get(node)
+    if node_info is None:
+        print(f"[generate-tests] Node not found in index: {node}")
+        LATEST_GENERATED_TESTCASES = None
+        return
+
+    node_fn, node_file_path = node_info
+
+    try:
+        with open(node_file_path, "r", encoding="utf-8") as f:
+            raw_file_content = f.read()
+    except OSError as e:
+        print(f"[generate-tests] Failed to read file {node_file_path}: {e}")
+        return
+
+    file_content = (
+        f"file_name: {node_file_path}\n"
+        "file_content:\n"
+        f"{raw_file_content}"
+    )
+
+    readme_content = ""
+    readme_path = get_project_root() / "README.md"
+    try:
+        with open(readme_path, "r", encoding="utf-8") as f:
+            readme_content = (
+                f"file_name: {readme_path}\n"
+                "file_content:\n"
+                f"{f.read()}"
+            )
+    except OSError as e:
+        print(f"[generate-tests] Failed to read README at {readme_path}: {e}")
+
+    # Pull source from actual file line ranges at request-time.
+    node_source = get_function_source_from_file(node_fn.name, node_file_path, node_fn.lineno) or node_fn.source
+    conflict_functions = [format_function_context(node_fn.name, node_file_path, node_source)]
+    for ancestor in ancestors:
+        ancestor_info = FUNCTION_INDEX.get(ancestor)
+        if ancestor_info is None:
+            continue
+        ancestor_fn, ancestor_file_path = ancestor_info
+        if ancestor_file_path == node_file_path:
+            ancestor_source = (
+                get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
+                or ancestor_fn.source
+            )
+            conflict_functions.append(
+                format_function_context(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
+
+    dependent_functions_other_files = []
+    for ancestor in ancestors:
+        ancestor_info = FUNCTION_INDEX.get(ancestor)
+        if ancestor_info is None:
+            continue
+        ancestor_fn, ancestor_file_path = ancestor_info
+        if ancestor_file_path != node_file_path:
+            ancestor_source = (
+                get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
+                or ancestor_fn.source
+            )
+            dependent_functions_other_files.append(
+                format_function_context(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
+
+    payload = {
+        "file_content": file_content,
+        "commit_message": LATEST_COMMIT_MESSAGE,
+        "readme_content": readme_content,
+        "conflict_functions": conflict_functions,
+        "ancestor_functions_other_files": dependent_functions_other_files,
+    }
+    print(payload)
+    print("--------------------------------")
+    print("--------------------------------")
+    try:
+        ws_url = "ws://10.30.197.121:8000/generate-tests"
+        with connect(ws_url, open_timeout=10, close_timeout=10) as websocket:
+            websocket.send(json.dumps(payload))
+            response = websocket.recv()
+            try:
+                parsed_response = json.loads(response)
+                LATEST_GENERATED_TESTCASES = parsed_response
+                print("[generate-tests] Response JSON:", parsed_response)
+            except (TypeError, ValueError):
+                LATEST_GENERATED_TESTCASES = response
+                print("[generate-tests] Response text:", response)
+    except Exception as e:
+        LATEST_GENERATED_TESTCASES = None
+        print(f"[generate-tests] WebSocket request failed: {e}")
+
+
+def send_generate_merge_request(
+    node: str,
+    ancestors: set[str],
+):
     node_info = FUNCTION_INDEX.get(node)
     if node_info is None:
         print(f"[generate-tests] Node not found in index: {node}")
@@ -159,8 +273,8 @@ def send_generate_tests_request(
 
     payload = {
         "file_content": file_content,
-        "commit_message": "testtttting",
-        "readme_content": readme_content,
+        "commit_message_a": LATEST_REMOTE_CONTENT,
+        "commit_message_b": LATEST_CURRENT_CONTENT,
         "conflict_functions": conflict_functions,
         "ancestor_functions_other_files": dependent_functions_other_files,
     }
@@ -168,7 +282,7 @@ def send_generate_tests_request(
     print("--------------------------------")
     print("--------------------------------")
     try:
-        ws_url = "ws://10.30.197.121:8000/generate-tests"
+        ws_url = "ws://10.30.197.121:8000/generate-merge"
         with connect(ws_url, open_timeout=10, close_timeout=10) as websocket:
             websocket.send(json.dumps(payload))
             response = websocket.recv()
@@ -179,14 +293,110 @@ def send_generate_tests_request(
     except Exception as e:
         print(f"[generate-tests] WebSocket request failed: {e}")
 
+
+
+def send_generate_feedback_request(
+    node: str,
+    ancestors: set[str],
+):
+    node_info = FUNCTION_INDEX.get(node)
+    if node_info is None:
+        print(f"[generate-tests] Node not found in index: {node}")
+        return
+
+    node_fn, node_file_path = node_info
+
+    try:
+        with open(node_file_path, "r", encoding="utf-8") as f:
+            raw_file_content = f.read()
+    except OSError as e:
+        print(f"[generate-tests] Failed to read file {node_file_path}: {e}")
+        return
+
+    file_content = (
+        f"file_name: {node_file_path}\n"
+        "file_content:\n"
+        f"{raw_file_content}"
+    )
+
+    readme_content = ""
+    readme_path = get_project_root() / "README.md"
+    try:
+        with open(readme_path, "r", encoding="utf-8") as f:
+            readme_content = (
+                f"file_name: {readme_path}\n"
+                "file_content:\n"
+                f"{f.read()}"
+            )
+    except OSError as e:
+        print(f"[generate-tests] Failed to read README at {readme_path}: {e}")
+
+    # Pull source from actual file line ranges at request-time.
+    node_source = get_function_source_from_file(node_fn.name, node_file_path, node_fn.lineno) or node_fn.source
+    conflict_functions = [format_function_context(node_fn.name, node_file_path, node_source)]
+    for ancestor in ancestors:
+        ancestor_info = FUNCTION_INDEX.get(ancestor)
+        if ancestor_info is None:
+            continue
+        ancestor_fn, ancestor_file_path = ancestor_info
+        if ancestor_file_path == node_file_path:
+            ancestor_source = (
+                get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
+                or ancestor_fn.source
+            )
+            conflict_functions.append(
+                format_function_context(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
+
+    dependent_functions_other_files = []
+    for ancestor in ancestors:
+        ancestor_info = FUNCTION_INDEX.get(ancestor)
+        if ancestor_info is None:
+            continue
+        ancestor_fn, ancestor_file_path = ancestor_info
+        if ancestor_file_path != node_file_path:
+            ancestor_source = (
+                get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
+                or ancestor_fn.source
+            )
+            dependent_functions_other_files.append(
+                format_function_context(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
+
+    payload = {
+        "file_content": file_content,
+        "commit_message_a": LATEST_REMOTE_CONTENT,
+        "commit_message_b": LATEST_CURRENT_CONTENT,
+        "conflict_functions": conflict_functions,
+        "ancestor_functions_other_files": dependent_functions_other_files,
+        "feedback": "testing"
+    }
+    print(payload)
+    print("--------------------------------")
+    print("--------------------------------")
+    try:
+        ws_url = "ws://10.30.197.121:8000/generate-feedback"
+        with connect(ws_url, open_timeout=10, close_timeout=10) as websocket:
+            websocket.send(json.dumps(payload))
+            response = websocket.recv()
+            try:
+                print("[generate-tests] Response JSON:", json.loads(response))
+            except (TypeError, ValueError):
+                print("[generate-tests] Response text:", response)
+    except Exception as e:
+        print(f"[generate-tests] WebSocket request failed: {e}")
+
+
+
 def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGraph:
     if node not in G:
         return G.copy()
+    ancestors = nx.ancestors(G, node)
     if direct_only:
         nodes = set(G.predecessors(node)) | {node}
     else:
-        ancestors = nx.ancestors(G, node)
         nodes = ancestors | {node}
+        
     T = nx.DiGraph()
     # Preserve node attributes (especially "label") so UI shows function names.
     T.add_nodes_from((n, G.nodes[n]) for n in nodes)
@@ -198,7 +408,11 @@ def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGr
                     T.add_edge(source, target)
             else:
                 if nx.has_path(G, target, node):
-                    T.add_edge(source, target)
+                    T.add_edge(source, target)\
+                        
+    send_generate_tests_request(node, ancestors)
+    # send_generate_merge_request(node, ancestors)
+    # send_generate_feedback_request(node, ancestors)
     return T
 
 def _fast_grid_positions(nodes: list[str], scale: float = 220.0) -> dict[str, tuple[float, float]]:
@@ -236,42 +450,112 @@ def to_react_flow(G: nx.DiGraph) -> dict:
     ]
     return {"nodes": nodes, "edges": edges}
 
+
+
+
 async def handler(websocket):
+    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_GENERATED_TESTCASES
     payload_raw = await websocket.recv()
-    pwd = payload_raw
-    conflicted_functions = await websocket.recv()
-    conflicted_functions = json.loads(conflicted_functions)  
-    target_function = "make_response"
-    direct_only = False
+    direct_only = True
+    pwd = ""
+    conflicted_functions = ""
+    conflicted_functions_map: dict[str, list[str]] = {}
+    target_function = ""
+    curr = ""
+    remote = ""
+    commit = ""
+    print(f"Received payload: {payload_raw}")
 
     # Backward compatible:
     # - If payload is a plain string, treat it as project path.
-    # - If payload is JSON, support path + target function selection.
-    try:
-        payload = json.loads(payload_raw)
-        if isinstance(payload, dict):
-            pwd = payload.get("path", pwd)
-            target_function = payload.get("targetFunction", target_function)
-            direct_only = bool(payload.get("directOnly", direct_only))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        pass
+    # - If payload is JSON, support both old keys and extension "t*" keys.
+    payload = payload_raw
+    if isinstance(payload_raw, str):
+        try:
+            payload = json.loads(payload_raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = payload_raw
+
+    if isinstance(payload, dict):
+        # print(f"Payload: {payload}")
+        pwd = payload.get("pwd", payload.get("tpwd", payload.get("path", "")))
+        # print(f"PWD: {pwd}")
+        conflicted_functions = payload.get("conflicted_functions", payload.get("tconflictedFunctions", ""))
+        # print(f"Conflicted functions: {conflicted_functions}")
+        conflicted_functions_map = _parse_conflicted_functions(conflicted_functions)
+        target_function = payload.get("target_function", payload.get("ttargetFunction", payload.get("targetFunction", "")))
+        # print(f"Target function: {target_function}")
+        curr = payload.get("curr", payload.get("tcurr", ""))
+        # print(f"Curr: {curr}")
+        remote = payload.get("remote", payload.get("tremote", ""))
+        # print(f"Remote: {remote}")
+        commit = payload.get("commit", payload.get("tcommit", ""))
+        # print(f"Commit: {commit}")
+        direct_only = bool(payload.get("direct_only", payload.get("directOnly", direct_only)))
+        # print(f"Direct only: {direct_only}")
+    elif isinstance(payload, str):
+        pwd = payload
+
+    LATEST_CURRENT_CONTENT = curr
+    LATEST_REMOTE_CONTENT = remote
+    LATEST_COMMIT_MESSAGE = commit
 
     await websocket.send(json.dumps({"type": "ack", "message": "Building graph..."}))
 
     try:
         G = await asyncio.to_thread(build_dependency_graph, Path(pwd))
         target_candidates = [n for n, data in G.nodes(data=True) if data.get("label") == target_function]
+
+        # Prefer the target from the conflicted file to avoid cross-file name collisions.
+        if target_candidates and conflicted_functions_map:
+            preferred_files = set()
+            pwd_path = Path(pwd).resolve()
+            for rel_path, fn_names in conflicted_functions_map.items():
+                if target_function in fn_names:
+                    preferred_files.add(str((pwd_path / rel_path).resolve()))
+            if preferred_files:
+                scoped_candidates = [
+                    node_id for node_id in target_candidates
+                    if str(node_id).split(":", 1)[0] in preferred_files
+                ]
+                if scoped_candidates:
+                    target_candidates = scoped_candidates
+
         target = None
         if target_candidates:
             # If multiple functions share the same name, pick the one with the most callers.
             target = max(target_candidates, key=lambda node_id: G.in_degree(node_id))
-        T = await asyncio.to_thread(get_subgraph, G, target, direct_only) if target else G
+        if not target:
+            await graph_queue.put({
+                "error": (
+                    f"Target function '{target_function}' was not found in a parseable Python AST. "
+                    "Resolve merge markers in that function and retry."
+                )
+            })
+            return
+
+        T = await asyncio.to_thread(get_subgraph, G, target, direct_only)
         graph_data = await asyncio.to_thread(to_react_flow, T)
+        # ancestors = nx.ancestors(G, node)
+        # send_generate_tests_request(target, ancestors)
+        # send_generate_merge_request(target, ancestors)
+        # send_generate_feedback_request(target, ancestors)
+
     except Exception as exc:
         await graph_queue.put({"error": f"Failed to build graph: {exc}"})
         return
 
     await graph_queue.put(graph_data)
+
+    if LATEST_GENERATED_TESTCASES:
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "generated_testcases",
+                    "payload": LATEST_GENERATED_TESTCASES
+                }
+            )
+        )
 
 async def react_flow_server(websocket):
     try:

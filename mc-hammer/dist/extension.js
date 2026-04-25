@@ -32,13 +32,15 @@ var extension_exports = {};
 __export(extension_exports, {
   activate: () => activate,
   deactivate: () => deactivate,
-  runApprovedCommand: () => runApprovedCommand
+  runApprovedCommand: () => runApprovedCommand,
+  testCases: () => testCases
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode2 = __toESM(require("vscode"));
 var cp = __toESM(require("child_process"));
 var path = __toESM(require("path"));
 var import_fs = require("fs");
+<<<<<<< HEAD
 
 // src/conflictPetView.ts
 var vscode = __toESM(require("vscode"));
@@ -118,17 +120,24 @@ var ConflictPetViewProvider = class {
 };
 
 // src/extension.ts
+=======
+>>>>>>> 8c466c5b8e9f872ac4455de4d664d428a00211ee
 var hammerTerminal;
 var reactTerminal;
 var conflictStatusBar = null;
 var conflictPetViewProvider = null;
 var socket = new WebSocket("ws://127.0.0.1:8765");
+<<<<<<< HEAD
 async function buttonClicked(conflictStatusBar2, conflictPetViewProvider2) {
+=======
+async function buttonClicked(context) {
+>>>>>>> 8c466c5b8e9f872ac4455de4d664d428a00211ee
   const terminal = getTerminal();
   terminal.show();
   terminal.sendText("git diff --name-only --diff-filter=U");
   const conflictedFunctions = await getConflictedFunctions();
   if (Object.keys(conflictedFunctions).length === 0) {
+<<<<<<< HEAD
     if (conflictStatusBar2) {
       conflictStatusBar2.color = new vscode2.ThemeColor("statusBar.debuggingForeground");
       conflictStatusBar2.text = "$(check) \u{1F528} No Merge Conflicts";
@@ -148,13 +157,25 @@ async function buttonClicked(conflictStatusBar2, conflictPetViewProvider2) {
     conflictPetViewProvider2.setConflictState(true);
   }
   vscode2.window.showInformationMessage(
+=======
+    vscode.window.showInformationMessage("No merge conflicts detected in Python files.");
+    return;
+  }
+  vscode.window.showInformationMessage(
+>>>>>>> 8c466c5b8e9f872ac4455de4d664d428a00211ee
     `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(", ")}`
   );
   const targetFunctionFile = Object.keys(conflictedFunctions)[0] ?? "";
   const targetFunction = conflictedFunctions[targetFunctionFile];
+<<<<<<< HEAD
   const workspacePath = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!targetFunctionFile || !workspacePath) {
     vscode2.window.showErrorMessage("MC Hammer: Could not determine target function or workspace path.");
+=======
+  const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!targetFunctionFile || !workspacePath) {
+    vscode.window.showErrorMessage("MC Hammer: Could not determine target function or workspace path.");
+>>>>>>> 8c466c5b8e9f872ac4455de4d664d428a00211ee
     return;
   }
   const [remote, curr, commit] = await Promise.all([
@@ -163,6 +184,7 @@ async function buttonClicked(conflictStatusBar2, conflictPetViewProvider2) {
     getLatestMainCommitMessage(workspacePath)
   ]);
   if (!remote || !curr || !commit) {
+<<<<<<< HEAD
     vscode2.window.showErrorMessage("MC Hammer: Could not retrieve all required data. Aborting send.");
     return;
   }
@@ -170,6 +192,16 @@ async function buttonClicked(conflictStatusBar2, conflictPetViewProvider2) {
   if (dir) {
   } else {
     vscode2.window.showErrorMessage("MC Hammer: Could not retrieve working directory. Aborting...");
+=======
+    vscode.window.showErrorMessage("MC Hammer: Could not retrieve all required data. Aborting send.");
+    return;
+  }
+  const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (dir) {
+    runApprovedCommand(context, dir, JSON.stringify(conflictedFunctions), targetFunction[0], curr, remote, commit);
+  } else {
+    vscode.window.showErrorMessage("MC Hammer: Could not retrieve working directory. Aborting...");
+>>>>>>> 8c466c5b8e9f872ac4455de4d664d428a00211ee
     return;
   }
 }
@@ -266,6 +298,149 @@ function getTerminal() {
   }
   return hammerTerminal;
 }
+<<<<<<< HEAD
+=======
+var latestGeneratedTestCases = null;
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function isGeneratedTestCase(value) {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const requiredFields = [
+    "filename",
+    "functionName",
+    "testName",
+    "setup",
+    "call",
+    "expected_return",
+    "expected_side_effects",
+    "description"
+  ];
+  return requiredFields.every((field) => typeof value[field] === "string");
+}
+function parseTestCasesPayload(rawPayload) {
+  let payload = rawPayload;
+  if (typeof rawPayload === "string") {
+    const trimmed = rawPayload.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        payload = JSON.parse(trimmed);
+      } catch {
+        return null;
+      }
+    } else {
+      return null;
+    }
+  }
+  if (Array.isArray(payload)) {
+    return payload.every(isGeneratedTestCase) ? payload : null;
+  }
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const arrayCandidate = payload.testcases ?? payload.testCases ?? payload.test_cases ?? payload.cases ?? payload.payload;
+  if (!Array.isArray(arrayCandidate)) {
+    return null;
+  }
+  return arrayCandidate.every(isGeneratedTestCase) ? arrayCandidate : null;
+}
+function parseJsonIfPossible(rawPayload) {
+  if (typeof rawPayload !== "string") {
+    return rawPayload;
+  }
+  const trimmed = rawPayload.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    return rawPayload;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return rawPayload;
+  }
+}
+function getModuleName(filename) {
+  const normalized = filename.replace(/\\/g, "/");
+  const withoutExtension = normalized.endsWith(".py") ? normalized.slice(0, -3) : normalized;
+  const basename = withoutExtension.split("/").pop() ?? withoutExtension;
+  return basename.trim();
+}
+function toPythonIdentifier(value) {
+  const normalized = value.trim().replace(/[^a-zA-Z0-9_]/g, "_").replace(/^[^a-zA-Z_]+/, "");
+  return normalized || "generated_test";
+}
+function indentPythonBlock(text, level = 1) {
+  const indent = "    ".repeat(level);
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  return lines.map((line) => line.trim() ? `${indent}${line}` : "").join("\n");
+}
+function buildCallSnippet(call) {
+  const trimmed = call.trim();
+  if (!trimmed) {
+    return "result = None";
+  }
+  const normalizedLines = call.replace(/\r\n/g, "\n").split("\n");
+  const hasResultAssignment = normalizedLines.some((line) => line.trimStart().startsWith("result"));
+  if (hasResultAssignment) {
+    return normalizedLines.join("\n");
+  }
+  if (normalizedLines.length === 1) {
+    return `result = ${normalizedLines[0]}`;
+  }
+  return ["_mc_hammer_call = (", ...normalizedLines, ")", "result = _mc_hammer_call"].join("\n");
+}
+function buildPythonTestRunner(testCases2) {
+  const importLines = [...new Set(testCases2.map((testCase) => {
+    const moduleName = getModuleName(testCase.filename);
+    return `from ${moduleName} import ${testCase.functionName}`;
+  }))].sort();
+  const testFunctions = testCases2.map((testCase) => {
+    const functionName = toPythonIdentifier(testCase.testName);
+    const setupBlock = indentPythonBlock(testCase.setup, 1);
+    const callBlock = indentPythonBlock(buildCallSnippet(testCase.call), 1);
+    const expectedLine = `    expected = ${testCase.expected_return}`;
+    const returnLine = `    return ${JSON.stringify(testCase.testName)}, result, expected`;
+    return [
+      `def ${functionName}():`,
+      setupBlock,
+      callBlock,
+      expectedLine,
+      returnLine
+    ].join("\n");
+  });
+  const mainLines = [
+    "def main():",
+    "    tests = ["
+  ];
+  for (const testCase of testCases2) {
+    mainLines.push(`        (${JSON.stringify(testCase.functionName)}, ${toPythonIdentifier(testCase.testName)}),`);
+  }
+  mainLines.push(
+    "    ]",
+    "",
+    "    for function_name, test in tests:",
+    "        test_name, actual, expected = test()",
+    "        if actual == expected:",
+    '            print(f"{function_name},{test_name}, SUCCESS")',
+    "        else:",
+    '            print(f"{function_name},{test_name}, FAIL (expected={expected!r}, actual={actual!r})")',
+    "",
+    "if __name__ == '__main__':",
+    "    main()"
+  );
+  return [
+    "# Auto-generated by MC Hammer",
+    ...importLines,
+    "",
+    ...testFunctions.flatMap((fnBody) => [fnBody, ""]),
+    ...mainLines
+  ].join("\n");
+}
+>>>>>>> 8c466c5b8e9f872ac4455de4d664d428a00211ee
 function sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit) {
   const data = JSON.stringify({
     pwd,
@@ -299,7 +474,11 @@ function startReactAndPreview(context) {
   }, 4e3);
 }
 async function runApprovedCommand(context, pwd, conflictedFunctions, targetFunction, curr, remote, commit) {
+<<<<<<< HEAD
   const result = await vscode2.window.showInformationMessage(
+=======
+  const result = await vscode.window.showInformationMessage(
+>>>>>>> 8c466c5b8e9f872ac4455de4d664d428a00211ee
     `MC Hammer wants to work its magic}`,
     { modal: true },
     "Run it",
@@ -361,6 +540,7 @@ function activate(context) {
           }
         })
       );
+<<<<<<< HEAD
     };
     git.repositories.forEach(attachToRepo);
     context.subscriptions.push(git.onDidOpenRepository(attachToRepo));
@@ -374,6 +554,77 @@ function activate(context) {
       });
     })
   );
+=======
+    } else {
+      conflictStatusBar.hide();
+    }
+  });
+  context.subscriptions.push(watcher);
+  const disposable = vscode.commands.registerCommand("mc-hammer.helloWorld", () => {
+    vscode.window.showInformationMessage("Hello! from mc-hammer!");
+  });
+  const hammerButton = vscode.commands.registerCommand("mc-hammer.buttonClicked", () => {
+    buttonClicked(context).catch((err) => {
+      vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
+    });
+  });
+  context.subscriptions.push(disposable);
+  context.subscriptions.push(hammerButton);
+  const buildTestRunnerButton = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    99
+  );
+  buildTestRunnerButton.text = "$(beaker) MC Hammer: Build Tests";
+  buildTestRunnerButton.command = "mc-hammer.buildTestCaseRunner";
+  buildTestRunnerButton.tooltip = "Generate temporary Python testcase runner from latest backend testcase payload";
+  buildTestRunnerButton.show();
+  context.subscriptions.push(buildTestRunnerButton);
+  const testRunnerBuilderCommand = vscode.commands.registerCommand("mc-hammer.buildTestCaseRunner", async () => {
+    if (!latestGeneratedTestCases || latestGeneratedTestCases.length === 0) {
+      vscode.window.showWarningMessage("No testcase payload received yet. Run MC Hammer generation first.");
+      return;
+    }
+    await testCases(latestGeneratedTestCases);
+  });
+  context.subscriptions.push(testRunnerBuilderCommand);
+  socket.addEventListener("message", (event) => {
+    const parsedMessage = parseJsonIfPossible(event.data);
+    const wrappedPayload = isRecord(parsedMessage) && parsedMessage.type === "generated_testcases" ? parsedMessage.payload : parsedMessage;
+    const testCasePayload = parseTestCasesPayload(wrappedPayload);
+    if (testCasePayload) {
+      latestGeneratedTestCases = testCasePayload;
+      testCases(testCasePayload).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`MC Hammer testcase runner error: ${message}`);
+      });
+      return;
+    }
+  });
+}
+async function testCases(rawPayload) {
+  const parsedTestCases = parseTestCasesPayload(rawPayload);
+  if (!parsedTestCases || parsedTestCases.length === 0) {
+    vscode.window.showErrorMessage("MC Hammer: Invalid testcase payload received from backend.");
+    return;
+  }
+  const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspacePath) {
+    vscode.window.showErrorMessage("MC Hammer: No workspace folder found for testcase generation.");
+    return;
+  }
+  const generatedFileName = `mc_hammer_temp_tests_${Date.now()}.py`;
+  const outputPath = path.join(workspacePath, generatedFileName);
+  const fileContent = buildPythonTestRunner(parsedTestCases);
+  try {
+    await import_fs.promises.writeFile(outputPath, fileContent, "utf8");
+    const doc = await vscode.workspace.openTextDocument(outputPath);
+    await vscode.window.showTextDocument(doc, { preview: false });
+    vscode.window.showInformationMessage(`MC Hammer generated testcase runner: ${generatedFileName}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    vscode.window.showErrorMessage(`MC Hammer failed to generate testcase runner: ${message}`);
+  }
+>>>>>>> 8c466c5b8e9f872ac4455de4d664d428a00211ee
 }
 function deactivate() {
   hammerTerminal?.dispose();
@@ -383,6 +634,7 @@ function deactivate() {
 0 && (module.exports = {
   activate,
   deactivate,
-  runApprovedCommand
+  runApprovedCommand,
+  testCases
 });
 //# sourceMappingURL=extension.js.map
