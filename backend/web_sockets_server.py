@@ -1,19 +1,27 @@
 import asyncio
 import websockets
-from dependency_graph_file_getter_helper import get_all_files, extract_functions
+from websockets.sync.client import connect
 from collections import deque
 from pathlib import Path
 import json
 import networkx as nx
+import math
 
-graph_data = {"nodes": [], "edges": []}
-data_ready = asyncio.Event()
+try:
+    from dependency_graph_file_getter_helper import get_all_files, extract_functions, get_project_root
+except ImportError:
+    # Supports importing as backend.web_sockets_server
+    from backend.dependency_graph_file_getter_helper import get_all_files, extract_functions, get_project_root
+
 FUNCTION_INDEX: dict[str, tuple[object, str]] = {}
+graph_queue: asyncio.Queue = asyncio.Queue()
+MAX_AMBIGUOUS_CALLEE_LINKS = 8
 
 
 def build_dependency_graph(root: Path):
     G = nx.DiGraph()
     fn_dict = {}
+    fn_name_to_ids: dict[str, list[str]] = {}
     dir_queue = deque([root])
     file_queue = deque()
     get_all_files(root, dir_queue, file_queue)
@@ -22,15 +30,33 @@ def build_dependency_graph(root: Path):
         current = file_queue.popleft()
         functions = extract_functions(current)
         for fn in functions:
-            if fn.name not in fn_dict:
-                fn_dict[fn.name] = fn
-                FUNCTION_INDEX[fn.name] = (fn, str(current))
+            fn_id = f"{current}:{fn.name}:{fn.lineno}"
+            fn_dict[fn_id] = fn
+            FUNCTION_INDEX[fn_id] = (fn, str(current))
+            fn_name_to_ids.setdefault(fn.name, []).append(fn_id)
 
-    for key, fn in fn_dict.items():
-        G.add_node(key)
+    for fn_id, fn in fn_dict.items():
+        G.add_node(fn_id, label=fn.name)
         for call in fn.calls:
-            if call in fn_dict:
-                G.add_edge(key, call)
+            # Normalize "self.make_response" -> "make_response" so method calls connect.
+            call_name = call.split(".")[-1]
+            candidates = fn_name_to_ids.get(call_name, [])
+            if len(candidates) == 1:
+                G.add_edge(fn_id, candidates[0])
+                continue
+
+            if len(candidates) > 1:
+                # Prefer same-file target when ambiguous (common for self.<method>()).
+                caller_file = str(fn_id).split(":", 1)[0]
+                same_file = [cand for cand in candidates if str(cand).split(":", 1)[0] == caller_file]
+                if len(same_file) == 1:
+                    G.add_edge(fn_id, same_file[0])
+                    continue
+
+                # Fallback: keep graph connected in large repos where names repeat.
+                # Capped fan-out avoids pathological edge explosion.
+                for cand in candidates[:MAX_AMBIGUOUS_CALLEE_LINKS]:
+                    G.add_edge(fn_id, cand)
     return G
 
 def get_function_source_from_file(
@@ -154,13 +180,16 @@ def send_generate_tests_request(
         print(f"[generate-tests] WebSocket request failed: {e}")
 
 def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGraph:
+    if node not in G:
+        return G.copy()
     if direct_only:
         nodes = set(G.predecessors(node)) | {node}
     else:
         ancestors = nx.ancestors(G, node)
         nodes = ancestors | {node}
     T = nx.DiGraph()
-    T.add_nodes_from(nodes)
+    # Preserve node attributes (especially "label") so UI shows function names.
+    T.add_nodes_from((n, G.nodes[n]) for n in nodes)
     for source, target in G.edges():
         if source in nodes and target in nodes:
             if direct_only:
@@ -172,12 +201,26 @@ def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGr
                     T.add_edge(source, target)
     return T
 
+def _fast_grid_positions(nodes: list[str], scale: float = 220.0) -> dict[str, tuple[float, float]]:
+    if not nodes:
+        return {}
+    cols = max(1, int(math.sqrt(len(nodes))))
+    positions = {}
+    for idx, node in enumerate(nodes):
+        row = idx // cols
+        col = idx % cols
+        positions[node] = (col * scale, row * scale)
+    return positions
+
 def to_react_flow(G: nx.DiGraph) -> dict:
-    pos = nx.spring_layout(G, seed=42, scale=400)
+    if len(G.nodes()) <= 150:
+        pos = nx.spring_layout(G, seed=42, scale=400)
+    else:
+        pos = _fast_grid_positions(list(G.nodes()))
     nodes = [
         {
             "id": str(node),
-            "data": {"label": node},
+            "data": {"label": G.nodes[node].get("label", str(node))},
             "position": {"x": float(pos[node][0]), "y": float(pos[node][1])}
         }
         for node in G.nodes()
@@ -194,18 +237,49 @@ def to_react_flow(G: nx.DiGraph) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 async def handler(websocket):
-    global graph_data
-    pwd = await websocket.recv()
-    G = build_dependency_graph(Path(pwd))
-    T = get_subgraph(G, "get_all_files", direct_only=True)
-    graph_data = to_react_flow(T)
-    data_ready.set()
+    payload_raw = await websocket.recv()
+    pwd = payload_raw
+    target_function = "make_response"
+    direct_only = False
+
+    # Backward compatible:
+    # - If payload is a plain string, treat it as project path.
+    # - If payload is JSON, support path + target function selection.
+    try:
+        payload = json.loads(payload_raw)
+        if isinstance(payload, dict):
+            pwd = payload.get("path", pwd)
+            target_function = payload.get("targetFunction", target_function)
+            direct_only = bool(payload.get("directOnly", direct_only))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+
+    await websocket.send(json.dumps({"type": "ack", "message": "Building graph..."}))
+
+    try:
+        G = await asyncio.to_thread(build_dependency_graph, Path(pwd))
+        target_candidates = [n for n, data in G.nodes(data=True) if data.get("label") == target_function]
+        target = None
+        if target_candidates:
+            # If multiple functions share the same name, pick the one with the most callers.
+            target = max(target_candidates, key=lambda node_id: G.in_degree(node_id))
+        T = await asyncio.to_thread(get_subgraph, G, target, direct_only) if target else G
+        graph_data = await asyncio.to_thread(to_react_flow, T)
+    except Exception as exc:
+        await graph_queue.put({"error": f"Failed to build graph: {exc}"})
+        return
+
+    await graph_queue.put(graph_data)
 
 async def react_flow_server(websocket):
     try:
-        await asyncio.wait_for(data_ready.wait(), timeout=60)
+        graph_data = await asyncio.wait_for(graph_queue.get(), timeout=300)
     except asyncio.TimeoutError:
         await websocket.send(json.dumps({"type": "error", "message": "Timed out waiting for graph data"}))
+        return
+
+    if "error" in graph_data:
+        await websocket.send(json.dumps({"type": "error", "message": graph_data["error"]}))
         return
 
     nodes = graph_data["nodes"]
@@ -215,11 +289,9 @@ async def react_flow_server(websocket):
 
     for node in nodes:
         await websocket.send(json.dumps({"type": "add_node", "node": node}))
-        await asyncio.sleep(3)
 
     for edge in edges:
         await websocket.send(json.dumps({"type": "add_edge", "edge": edge}))
-        await asyncio.sleep(3)
 
     await websocket.send(json.dumps({"type": "done"}))
 

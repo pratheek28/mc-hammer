@@ -72,18 +72,30 @@ def get_project_root() -> Path:
     return next(p for p in Path(__file__).absolute().parents if (p / ".git").exists())
 
 def extract_functions(filepath: str) -> list[FunctionInfo]:
-    with open(filepath) as f:
-        source = f.read()
+    try:
+        with open(filepath, encoding="utf-8", errors="ignore") as f:
+            source = f.read()
+    except OSError:
+        return []
     lines = source.splitlines(keepends=True)
-    tree = ast.parse(source)
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        # Skip files that cannot be parsed to avoid aborting large scans.
+        return []
     extractor = FunctionExtractor(lines)
     extractor.visit(tree)
     return extractor.functions
 
 def get_all_files(root: Path, dir_queue: deque, file_queue: deque):
+    ignored_dirs = {
+        ".venv", "__pycache__", ".git", ".vscode", "node_modules",
+        ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
+        "venv", "env", "build", "dist"
+    }
     while dir_queue:
         current = dir_queue.popleft()
-        if current.is_dir() and current.name != ".venv" and current.name != "__pycache__" and current.name != ".git" and current.name != ".vscode" and current.name != "node_modules":
+        if current.is_dir() and current.name not in ignored_dirs:
             for entry in current.iterdir():
                 dir_queue.append(entry)
         elif current.is_file() and current.suffix == ".py":

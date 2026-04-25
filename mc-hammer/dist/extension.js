@@ -93,15 +93,15 @@ async function getConflictedFunctions() {
     });
   });
 }
-async function buttonClicked() {
+async function buttonClicked(context) {
   const terminal = getTerminal();
   terminal.show();
   terminal.sendText("git diff --name-only --diff-filter=U");
   const conflictedFunctions = await getConflictedFunctions();
   if (Object.keys(conflictedFunctions).length === 0) {
     vscode.window.showInformationMessage("No merge conflicts detected in Python files.");
-    return;
   }
+  runApprovedCommand("Hello", context);
   vscode.window.showInformationMessage(
     `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(", ")}`
   );
@@ -192,7 +192,7 @@ function activate(context) {
     vscode.window.showInformationMessage("Hello! from mc-hammer!");
   });
   const hammerButton = vscode.commands.registerCommand("mc-hammer.buttonClicked", () => {
-    buttonClicked().catch((err) => {
+    buttonClicked(context).catch((err) => {
       vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
     });
   });

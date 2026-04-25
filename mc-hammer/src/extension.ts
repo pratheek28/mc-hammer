@@ -73,7 +73,7 @@ async function getConflictedFunctions(): Promise<Record<string, string[]>> {
     });
 }
 
-async function buttonClicked() {
+async function buttonClicked(context: vscode.ExtensionContext) {
     const terminal = getTerminal();
     terminal.show();
     // show the command running in terminal for visibility
@@ -84,8 +84,9 @@ async function buttonClicked() {
 
     if (Object.keys(conflictedFunctions).length === 0) {
         vscode.window.showInformationMessage('No merge conflicts detected in Python files.');
-        return;
+        //return;
     }
+	runApprovedCommand('Hello', context);
 
     // mostly for debugging purposes
     vscode.window.showInformationMessage(
@@ -207,7 +208,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // registers the hammer button in the editor title bar
 	const hammerButton = vscode.commands.registerCommand('mc-hammer.buttonClicked', () => {
-		buttonClicked().catch(err => {
+		buttonClicked(context).catch(err => {
 			vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
 		});
 	});
