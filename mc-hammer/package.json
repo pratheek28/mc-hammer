@@ -9,7 +9,7 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": ["onCommand:mc-hammer.helloWorld"],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
