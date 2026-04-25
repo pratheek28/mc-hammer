@@ -349,7 +349,7 @@ def send_generate_feedback_request(
         "commit_message_b": "testtttting",
         "conflict_functions": conflict_functions,
         "ancestor_functions_other_files": dependent_functions_other_files,
-        #INPUT THE FEEDBACK HERE
+        "feedback": "testing"
     }
     print(payload)
     print("--------------------------------")
@@ -388,7 +388,12 @@ def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGr
                     T.add_edge(source, target)
             else:
                 if nx.has_path(G, target, node):
-                    T.add_edge(source, target)
+                    T.add_edge(source, target)\
+                        
+    send_generate_tests_request(node, ancestors)
+    send_generate_merge_request(node, ancestors)
+    send_generate_feedback_request(node, ancestors)
+    
     return T
 
 def _fast_grid_positions(nodes: list[str], scale: float = 220.0) -> dict[str, tuple[float, float]]:
