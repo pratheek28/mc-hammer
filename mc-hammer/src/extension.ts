@@ -2,33 +2,53 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
 
+// ─── State ────────────────────────────────────────────────────────────────────
+
 let hammerTerminal: vscode.Terminal | undefined;
 let reactTerminal: vscode.Terminal | undefined;
-
 const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 
-async function buttonClicked() {
-    const terminal = getTerminal();
-    terminal.show();
-    terminal.sendText('git diff --name-only --diff-filter=U');
+// ─── Terminal Helpers ─────────────────────────────────────────────────────────
 
-    const conflictedFunctions = await getConflictedFunctions();
-
-    if (Object.keys(conflictedFunctions).length === 0) {
-        vscode.window.showInformationMessage('No merge conflicts detected in Python files.');
-        return;
+// Reuses the same named terminal across calls; recreates it if it was closed
+function getTerminal(): vscode.Terminal {
+    if (!hammerTerminal || hammerTerminal.exitStatus !== undefined) {
+        hammerTerminal = vscode.window.createTerminal('MC Hammer');
     }
-
-    vscode.window.showInformationMessage(
-        `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(', ')}`
-    );
-
-    sendToBackend(JSON.stringify(conflictedFunctions)); 
+    return hammerTerminal;
 }
 
-// uses git diff to get list of conflicted python files, then scans each file
-// for conflict markers and finds the enclosing python function
-// returns a dict with key = file path, value = list of function names with conflicts
+// ─── Backend Communication ────────────────────────────────────────────────────
+
+function sendToBackend(data: string) {
+    if (socket.readyState === WebSocket.OPEN) {
+        socket.send(data);
+    } else {
+        socket.addEventListener('open', () => socket.send(data), { once: true });
+    }
+}
+
+// ─── Conflict Detection ───────────────────────────────────────────────────────
+
+// Opens a document and shows/hides the status bar item based on conflict markers
+async function checkDocumentForConflicts(
+    uri: vscode.Uri,
+    conflictStatusBar: vscode.StatusBarItem
+) {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    if (doc.getText().includes('<<<<<<<')) {
+        conflictStatusBar.show();
+        vscode.window.showInformationMessage(
+            `MC Hammer detected a merge conflict in ${uri.fsPath}`
+        );
+    } else {
+        conflictStatusBar.hide();
+    }
+}
+
+// Uses git diff to get conflicted Python files, then scans each for conflict
+// markers and finds the enclosing function.
+// Returns: { filePath: [functionName, ...] }
 async function getConflictedFunctions(): Promise<Record<string, string[]>> {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     console.log('[MC Hammer] workspaceFolders:', workspaceFolders?.map(f => f.uri.fsPath));
@@ -92,21 +112,7 @@ async function getConflictedFunctions(): Promise<Record<string, string[]>> {
     });
 }
 
-// this is for putting in all commands in one singular terminal so everytime runApprovedCommand is called, it will reuse the same terminal if it exists
-function getTerminal(): vscode.Terminal {
-    if (!hammerTerminal || hammerTerminal.exitStatus !== undefined) {
-        hammerTerminal = vscode.window.createTerminal('MC Hammer');
-    }
-    return hammerTerminal;
-}
-
-function sendToBackend(data: string) {
-    if (socket.readyState === WebSocket.OPEN) {
-        socket.send(data);
-    }else {
-        socket.addEventListener('open', () => socket.send(data), {once: true});
-    }
-}
+// ─── UI / React Preview ───────────────────────────────────────────────────────
 
 function startReactAndPreview(context: vscode.ExtensionContext): void {
     if (!reactTerminal || reactTerminal.exitStatus !== undefined) {
@@ -119,17 +125,18 @@ function startReactAndPreview(context: vscode.ExtensionContext): void {
     }
 
     setTimeout(() => {
-        vscode.commands.executeCommand(
-            'simpleBrowser.show',
-            'http://localhost:5173'
-        );
+        vscode.commands.executeCommand('simpleBrowser.show', 'http://localhost:5173');
     }, 4000);
 }
 
-// code for showInformationMessage() 
-// notification of mc hammer wants to run command with buttons - pass in the command we want to run after approval
-// returns if it ran, was rejected, or dismissed 
-export async function runApprovedCommand(command: string, context: vscode.ExtensionContext): Promise<'ran' | 'rejected' | 'dismissed'> {
+// ─── Command Approval Flow ────────────────────────────────────────────────────
+
+// Shows a modal asking the user to approve or reject a command before running it.
+// Returns 'ran', 'rejected', or 'dismissed'.
+export async function runApprovedCommand(
+    command: string,
+    context: vscode.ExtensionContext
+): Promise<'ran' | 'rejected' | 'dismissed'> {
     const result = await vscode.window.showInformationMessage(
         `MC Hammer wants to run: ${command}`,
         { modal: true },
@@ -149,7 +156,7 @@ export async function runApprovedCommand(command: string, context: vscode.Extens
             sendToBackend(dir);
             vscode.window.showInformationMessage('Sent directory to backend!');
             startReactAndPreview(context);
-        }else {
+        } else {
             vscode.window.showInformationMessage('Failed');
         }
         return 'ran';
@@ -159,64 +166,84 @@ export async function runApprovedCommand(command: string, context: vscode.Extens
         return 'rejected';
     }
 
-    // covers dismissing the modal (escape key or clicking outside)
     return 'dismissed';
 }
+
+// ─── Button Handler ───────────────────────────────────────────────────────────
+
+async function buttonClicked() {
+    const terminal = getTerminal();
+    terminal.show();
+    terminal.sendText('git diff --name-only --diff-filter=U');
+
+    const conflictedFunctions = await getConflictedFunctions();
+
+    if (Object.keys(conflictedFunctions).length === 0) {
+        vscode.window.showInformationMessage('No merge conflicts detected in Python files.');
+        return;
+    }
+
+    vscode.window.showInformationMessage(
+        `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(', ')}`
+    );
+
+    sendToBackend(JSON.stringify(conflictedFunctions));
+}
+
+// ─── Activation ───────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "mc-hammer" is now active!');
 
-    // status bar item that appears when a merge conflict is detected in a python file
-    // clicking it triggers the hammer pipeline
+    // Status bar item — hidden until a conflict is detected
     const conflictStatusBar = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left,
         100
     );
     conflictStatusBar.text = '🔨 MC Hammer: Merge Conflict Detected';
-    conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground'); // red background
-    conflictStatusBar.command = 'mc-hammer.buttonClicked'; // clicking triggers the pipeline
+    conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    conflictStatusBar.command = 'mc-hammer.buttonClicked';
     conflictStatusBar.tooltip = 'Click to run MC Hammer on merge conflicts';
-    conflictStatusBar.hide(); // hidden until a conflict is detected
+    conflictStatusBar.hide();
     context.subscriptions.push(conflictStatusBar);
 
-    // watch for merge conflicts appearing in python files automatically
+    // Scan all already-open Python files at activation time
+    const openDocs = vscode.workspace.textDocuments.filter(d => d.fileName.endsWith('.py'));
+    for (const doc of openDocs) {
+        checkDocumentForConflicts(doc.uri, conflictStatusBar);
+    }
+
+    // Watch for Python files being saved/changed on disk
     const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');
-    watcher.onDidChange(async (uri) => {
-        const doc = await vscode.workspace.openTextDocument(uri);
-        if (doc.getText().includes('<<<<<<<')) {
-            // show the status bar item so user knows a conflict was detected
-            conflictStatusBar.show();
-            vscode.window.showInformationMessage(
-                `MC Hammer detected a merge conflict in ${uri.fsPath}`
-            );
-        } else {
-            // hide it if conflicts are resolved
-            conflictStatusBar.hide();
-        }
-    });
+    watcher.onDidChange(uri => checkDocumentForConflicts(uri, conflictStatusBar));
     context.subscriptions.push(watcher);
 
-    const disposable = vscode.commands.registerCommand('mc-hammer.helloWorld', () => {
-        vscode.window.showInformationMessage('Hello! from mc-hammer!');
-    });
+    // Also check when a Python file is newly opened in the editor
+    context.subscriptions.push(
+        vscode.workspace.onDidOpenTextDocument(doc => {
+            if (doc.fileName.endsWith('.py')) {
+                checkDocumentForConflicts(doc.uri, conflictStatusBar);
+            }
+        })
+    );
 
-    // registers the hammer button in the editor title bar
-	const hammerButton = vscode.commands.registerCommand('mc-hammer.buttonClicked', () => {
-		buttonClicked().catch(err => {
-			vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
-		});
-	});
+    // Commands
+    context.subscriptions.push(
+        vscode.commands.registerCommand('mc-hammer.helloWorld', () => {
+            vscode.window.showInformationMessage('Hello! from mc-hammer!');
+        })
+    );
 
-    context.subscriptions.push(disposable);
-    context.subscriptions.push(hammerButton);
-
-	//listen for messages from the backend - receiving commands for runApprovedCommand 
-	// 1) PRESENT ALL SOLUTIONS --> USER APPROVES ONE --> BACKEND SENDS APPRO
-	// socket.addEventListener('message', (event) => {
-	// 	const command = event.data;
-	// 	runApprovedCommand(command, context);
-	// });
+    context.subscriptions.push(
+        vscode.commands.registerCommand('mc-hammer.buttonClicked', () => {
+            buttonClicked().catch(err => {
+                vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
+            });
+        })
+    );
 }
+
+// ─── Deactivation ─────────────────────────────────────────────────────────────
 
 export function deactivate() {
     hammerTerminal?.dispose();
