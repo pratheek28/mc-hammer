@@ -239,6 +239,8 @@ def to_react_flow(G: nx.DiGraph) -> dict:
 async def handler(websocket):
     payload_raw = await websocket.recv()
     pwd = payload_raw
+    conflicted_functions = await websocket.recv()
+    conflicted_functions = json.loads(conflicted_functions)  
     target_function = "make_response"
     direct_only = False
 
