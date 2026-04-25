@@ -60,6 +60,14 @@ def get_function_source_from_file(
 
     return None
 
+def format_function_context(function_name: str, file_path: str, function_source: str) -> str:
+    return (
+        f"file_name: {file_path}\n"
+        f"function_name: {function_name}\n"
+        "function_content:\n"
+        f"{function_source}"
+    )
+
 def send_generate_tests_request(
     node: str,
     ancestors: set[str],
@@ -73,22 +81,32 @@ def send_generate_tests_request(
 
     try:
         with open(node_file_path, "r", encoding="utf-8") as f:
-            file_content = f.read()
+            raw_file_content = f.read()
     except OSError as e:
         print(f"[generate-tests] Failed to read file {node_file_path}: {e}")
         return
+
+    file_content = (
+        f"file_name: {node_file_path}\n"
+        "file_content:\n"
+        f"{raw_file_content}"
+    )
 
     readme_content = ""
     readme_path = get_project_root() / "README.md"
     try:
         with open(readme_path, "r", encoding="utf-8") as f:
-            readme_content = f.read()
+            readme_content = (
+                f"file_name: {readme_path}\n"
+                "file_content:\n"
+                f"{f.read()}"
+            )
     except OSError as e:
         print(f"[generate-tests] Failed to read README at {readme_path}: {e}")
 
     # Pull source from actual file line ranges at request-time.
     node_source = get_function_source_from_file(node_fn.name, node_file_path, node_fn.lineno) or node_fn.source
-    conflict_functions = [node_source]
+    conflict_functions = [format_function_context(node_fn.name, node_file_path, node_source)]
     for ancestor in ancestors:
         ancestor_info = FUNCTION_INDEX.get(ancestor)
         if ancestor_info is None:
@@ -99,7 +117,9 @@ def send_generate_tests_request(
                 get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
                 or ancestor_fn.source
             )
-            conflict_functions.append(ancestor_source)
+            conflict_functions.append(
+                format_function_context(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
 
     dependent_functions_other_files = []
     for ancestor in ancestors:
@@ -112,14 +132,20 @@ def send_generate_tests_request(
                 get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
                 or ancestor_fn.source
             )
-            dependent_functions_other_files.append(ancestor_source)
+            dependent_functions_other_files.append(
+                format_function_context(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
 
     payload = {
         "file_content": file_content,
+        "commit_message": "testtttting",
         "readme_content": readme_content,
         "conflict_functions": conflict_functions,
         "ancestor_functions_other_files": dependent_functions_other_files,
     }
+    print(payload)
+    print("--------------------------------")
+    print("--------------------------------")
     try:
         ws_url = "ws://10.30.197.121:8000/generate-tests"
         with connect(ws_url, open_timeout=10, close_timeout=10) as websocket:
