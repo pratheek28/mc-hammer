@@ -39,11 +39,19 @@ var vscode = __toESM(require("vscode"));
 var path = __toESM(require("path"));
 var hammerTerminal;
 var reactTerminal;
+var socket = new WebSocket("ws://127.0.0.1:8765");
 function getTerminal() {
   if (!hammerTerminal || hammerTerminal.exitStatus !== void 0) {
     hammerTerminal = vscode.window.createTerminal("MC Hammer");
   }
   return hammerTerminal;
+}
+function sendToBackend(data) {
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(data);
+  } else {
+    socket.addEventListener("open", () => socket.send(data), { once: true });
+  }
 }
 function startReactAndPreview(context) {
   if (!reactTerminal || reactTerminal.exitStatus !== void 0) {
@@ -61,7 +69,7 @@ function startReactAndPreview(context) {
     );
   }, 4e3);
 }
-async function runApprovedCommand(command) {
+async function runApprovedCommand(command, context) {
   const result = await vscode.window.showInformationMessage(
     `MC Hammer wants to run: ${command}`,
     { modal: true },
@@ -72,6 +80,16 @@ async function runApprovedCommand(command) {
     const terminal = getTerminal();
     terminal.show();
     terminal.sendText(command);
+    const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (dir) {
+      vscode.env.clipboard.writeText(dir);
+      vscode.window.showInformationMessage(`Copied dir: ${dir}`);
+      sendToBackend(dir);
+      vscode.window.showInformationMessage("Sent directory to backend!");
+      startReactAndPreview(context);
+    } else {
+      vscode.window.showInformationMessage("Failed");
+    }
     return "ran";
   }
   if (result === "Reject") {
@@ -81,12 +99,11 @@ async function runApprovedCommand(command) {
 }
 function activate(context) {
   console.log('Congratulations, your extension "mc-hammer" is now active!');
-  startReactAndPreview(context);
   const disposable = vscode.commands.registerCommand("mc-hammer.helloWorld", () => {
     vscode.window.showInformationMessage("Hello people from mc-hammer!");
   });
   const overlayRunCommand = vscode.commands.registerCommand("mc-hammer.overlayRunWhichPython3", async () => {
-    await runApprovedCommand("which python3");
+    await runApprovedCommand("which python3", context);
   });
   const overlayButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1e3);
   overlayButton.text = "MC HAMMER: HAMMER TIME\u{1F528}";
