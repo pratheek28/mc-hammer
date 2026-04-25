@@ -210,11 +210,12 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(disposable);
     context.subscriptions.push(hammerButton);
 
-	//listen for messages from the backend 
-	socket.addEventListener('message', (event) => {
-		const command = event.data;
-		runApprovedCommand(command, context);
-	});
+	//listen for messages from the backend - receiving commands for runApprovedCommand 
+	// 1) PRESENT ALL SOLUTIONS --> USER APPROVES ONE --> BACKEND SENDS APPRO
+	// socket.addEventListener('message', (event) => {
+	// 	const command = event.data;
+	// 	runApprovedCommand(command, context);
+	// });
 }
 
 export function deactivate() {
