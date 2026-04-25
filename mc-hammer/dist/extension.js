@@ -43,7 +43,11 @@ var import_fs = require("fs");
 var hammerTerminal;
 var reactTerminal;
 var socket = new WebSocket("ws://127.0.0.1:8765");
+<<<<<<< HEAD
 async function buttonClicked() {
+=======
+async function buttonClicked(context) {
+>>>>>>> 57256e1aadefb541595e8541a90ac9b4538c6b36
   const terminal = getTerminal();
   terminal.show();
   terminal.sendText("git diff --name-only --diff-filter=U");
@@ -55,6 +59,7 @@ async function buttonClicked() {
   vscode.window.showInformationMessage(
     `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(", ")}`
   );
+<<<<<<< HEAD
   const targetFunction = Object.keys(conflictedFunctions)[0] ?? "";
   const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!targetFunction || !workspacePath) {
@@ -67,6 +72,31 @@ async function buttonClicked() {
     getLatestMainCommitMessage(workspacePath)
   ]);
   sendToBackend("", JSON.stringify(conflictedFunctions), targetFunction, curr, remote, commit);
+=======
+  const targetFunctionFile = Object.keys(conflictedFunctions)[0] ?? "";
+  const targetFunction = conflictedFunctions[targetFunctionFile];
+  const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!targetFunctionFile || !workspacePath) {
+    vscode.window.showErrorMessage("MC Hammer: Could not determine target function or workspace path.");
+    return;
+  }
+  const [remote, curr, commit] = await Promise.all([
+    getRemoteFileContent(workspacePath, targetFunctionFile),
+    getCurrentFileContent(workspacePath, targetFunctionFile),
+    getLatestMainCommitMessage(workspacePath)
+  ]);
+  if (!remote || !curr || !commit) {
+    vscode.window.showErrorMessage("MC Hammer: Could not retrieve all required data. Aborting send.");
+    return;
+  }
+  const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (dir) {
+    runApprovedCommand(context, dir, JSON.stringify(conflictedFunctions), targetFunction[0], curr, remote, commit);
+  } else {
+    vscode.window.showErrorMessage("MC Hammer: Could not retrieve working directory. Aborting...");
+    return;
+  }
+>>>>>>> 57256e1aadefb541595e8541a90ac9b4538c6b36
 }
 function execInWorkspace(command, cwd) {
   return new Promise((resolve) => {
@@ -161,6 +191,7 @@ function getTerminal() {
   }
   return hammerTerminal;
 }
+<<<<<<< HEAD
 var tpwd = "";
 var tconflictedFunctions = "";
 var ttargetFunction = "";
@@ -333,6 +364,17 @@ function sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, c
     curr: tcurr,
     remote: tremote,
     commit: tcommit
+=======
+function sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit) {
+  const data = JSON.stringify({
+    pwd,
+    conflicted_functions: conflictedFunctions,
+    target_function: targetFunction,
+    curr,
+    remote,
+    commit,
+    direct_only: true
+>>>>>>> 57256e1aadefb541595e8541a90ac9b4538c6b36
   });
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(data);
@@ -356,14 +398,15 @@ function startReactAndPreview(context) {
     );
   }, 4e3);
 }
-async function runApprovedCommand(command, context) {
+async function runApprovedCommand(context, pwd, conflictedFunctions, targetFunction, curr, remote, commit) {
   const result = await vscode.window.showInformationMessage(
-    `MC Hammer wants to run: ${command}`,
+    `MC Hammer wants to work its magic}`,
     { modal: true },
     "Run it",
     "Reject"
   );
   if (result === "Run it") {
+<<<<<<< HEAD
     const terminal = getTerminal();
     terminal.show();
     terminal.sendText(command);
@@ -377,6 +420,10 @@ async function runApprovedCommand(command, context) {
     } else {
       vscode.window.showInformationMessage("Failed");
     }
+=======
+    sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit);
+    startReactAndPreview(context);
+>>>>>>> 57256e1aadefb541595e8541a90ac9b4538c6b36
     return "ran";
   }
   if (result === "Reject") {

@@ -22,6 +22,19 @@ LATEST_CURRENT_CONTENT = ""
 LATEST_GENERATED_TESTCASES = None
 
 
+def _parse_conflicted_functions(value) -> dict[str, list[str]]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
 def build_dependency_graph(root: Path):
     G = nx.DiGraph()
     fn_dict = {}
@@ -378,10 +391,10 @@ def send_generate_feedback_request(
 def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGraph:
     if node not in G:
         return G.copy()
+    ancestors = nx.ancestors(G, node)
     if direct_only:
         nodes = set(G.predecessors(node)) | {node}
     else:
-        ancestors = nx.ancestors(G, node)
         nodes = ancestors | {node}
         
     T = nx.DiGraph()
@@ -444,9 +457,10 @@ def to_react_flow(G: nx.DiGraph) -> dict:
 async def handler(websocket):
     global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_GENERATED_TESTCASES
     payload_raw = await websocket.recv()
-    direct_only = False
+    direct_only = True
     pwd = ""
     conflicted_functions = ""
+    conflicted_functions_map: dict[str, list[str]] = {}
     target_function = ""
     curr = ""
     remote = ""
@@ -464,13 +478,22 @@ async def handler(websocket):
             payload = payload_raw
 
     if isinstance(payload, dict):
+        # print(f"Payload: {payload}")
         pwd = payload.get("pwd", payload.get("tpwd", payload.get("path", "")))
+        print(f"PWD: {pwd}")
         conflicted_functions = payload.get("conflicted_functions", payload.get("tconflictedFunctions", ""))
+        print(f"Conflicted functions: {conflicted_functions}")
+        conflicted_functions_map = _parse_conflicted_functions(conflicted_functions)
         target_function = payload.get("target_function", payload.get("ttargetFunction", payload.get("targetFunction", "")))
+        print(f"Target function: {target_function}")
         curr = payload.get("curr", payload.get("tcurr", ""))
+        print(f"Curr: {curr}")
         remote = payload.get("remote", payload.get("tremote", ""))
+        print(f"Remote: {remote}")
         commit = payload.get("commit", payload.get("tcommit", ""))
+        print(f"Commit: {commit}")
         direct_only = bool(payload.get("direct_only", payload.get("directOnly", direct_only)))
+        print(f"Direct only: {direct_only}")
     elif isinstance(payload, str):
         pwd = payload
 
@@ -483,11 +506,36 @@ async def handler(websocket):
     try:
         G = await asyncio.to_thread(build_dependency_graph, Path(pwd))
         target_candidates = [n for n, data in G.nodes(data=True) if data.get("label") == target_function]
+
+        # Prefer the target from the conflicted file to avoid cross-file name collisions.
+        if target_candidates and conflicted_functions_map:
+            preferred_files = set()
+            pwd_path = Path(pwd).resolve()
+            for rel_path, fn_names in conflicted_functions_map.items():
+                if target_function in fn_names:
+                    preferred_files.add(str((pwd_path / rel_path).resolve()))
+            if preferred_files:
+                scoped_candidates = [
+                    node_id for node_id in target_candidates
+                    if str(node_id).split(":", 1)[0] in preferred_files
+                ]
+                if scoped_candidates:
+                    target_candidates = scoped_candidates
+
         target = None
         if target_candidates:
             # If multiple functions share the same name, pick the one with the most callers.
             target = max(target_candidates, key=lambda node_id: G.in_degree(node_id))
-        T = await asyncio.to_thread(get_subgraph, G, target, direct_only) if target else G
+        if not target:
+            await graph_queue.put({
+                "error": (
+                    f"Target function '{target_function}' was not found in a parseable Python AST. "
+                    "Resolve merge markers in that function and retry."
+                )
+            })
+            return
+
+        T = await asyncio.to_thread(get_subgraph, G, target, direct_only)
         graph_data = await asyncio.to_thread(to_react_flow, T)
     except Exception as exc:
         await graph_queue.put({"error": f"Failed to build graph: {exc}"})

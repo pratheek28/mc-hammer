@@ -2,13 +2,14 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
 import { promises as fs } from 'fs';
+import { send } from 'process';
 
 let hammerTerminal: vscode.Terminal | undefined;
 let reactTerminal: vscode.Terminal | undefined;
 
 const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 
-async function buttonClicked() {
+async function buttonClicked(context: vscode.ExtensionContext) {
     const terminal = getTerminal();
     terminal.show();
     terminal.sendText('git diff --name-only --diff-filter=U');
@@ -24,21 +25,33 @@ async function buttonClicked() {
         `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(', ')}`
     );
 
-    const targetFunction = Object.keys(conflictedFunctions)[0] ?? "";
+    const targetFunctionFile = Object.keys(conflictedFunctions)[0] ?? "";
+    const targetFunction = conflictedFunctions[targetFunctionFile];
     const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-    if (!targetFunction || !workspacePath) {
-        sendToBackend("", JSON.stringify(conflictedFunctions), targetFunction, "", "", "");
+    if (!targetFunctionFile || !workspacePath) {
+        vscode.window.showErrorMessage('MC Hammer: Could not determine target function or workspace path.');
         return;
     }
 
     const [remote, curr, commit] = await Promise.all([
-        getRemoteFileContent(workspacePath, targetFunction),
-        getCurrentFileContent(workspacePath, targetFunction),
+        getRemoteFileContent(workspacePath, targetFunctionFile),
+        getCurrentFileContent(workspacePath, targetFunctionFile),
         getLatestMainCommitMessage(workspacePath)
     ]);
 
-    sendToBackend("", JSON.stringify(conflictedFunctions), targetFunction, curr, remote, commit);
+    if (!remote || !curr || !commit) {
+        vscode.window.showErrorMessage('MC Hammer: Could not retrieve all required data. Aborting send.');
+        return;
+    }
+    const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    if (dir) {
+        runApprovedCommand(context, dir, JSON.stringify(conflictedFunctions), targetFunction[0], curr, remote, commit); 
+    }else {
+        vscode.window.showErrorMessage('MC Hammer: Could not retrieve working directory. Aborting...');
+        return;
+    }
 }
 
 function execInWorkspace(command: string, cwd: string): Promise<string> {
@@ -59,7 +72,6 @@ function quoteForShell(value: string): string {
 
 async function getRemoteFileContent(cwd: string, filePath: string): Promise<string> {
     const quotedPath = quoteForShell(filePath);
-    // Try the exact command shape requested first, then fallback to canonical git syntax.
     const requestedCommand = `git show origin main:${quotedPath}`;
     const requestedOutput = await execInWorkspace(requestedCommand, cwd);
     if (requestedOutput.trim()) {
@@ -83,9 +95,6 @@ function getLatestMainCommitMessage(cwd: string): Promise<string> {
     return execInWorkspace('git log main -1 --pretty=%B', cwd);
 }
 
-// uses git diff to get list of conflicted python files, then scans each file
-// for conflict markers and finds the enclosing python function
-// returns a dict with key = file path, value = list of function names with conflicts
 async function getConflictedFunctions(): Promise<Record<string, string[]>> {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     console.log('[MC Hammer] workspaceFolders:', workspaceFolders?.map(f => f.uri.fsPath));
@@ -149,7 +158,6 @@ async function getConflictedFunctions(): Promise<Record<string, string[]>> {
     });
 }
 
-// this is for putting in all commands in one singular terminal so everytime runApprovedCommand is called, it will reuse the same terminal if it exists
 function getTerminal(): vscode.Terminal {
     if (!hammerTerminal || hammerTerminal.exitStatus !== undefined) {
         hammerTerminal = vscode.window.createTerminal('MC Hammer');
@@ -350,36 +358,20 @@ function buildPythonTestRunner(testCases: GeneratedTestCase[]): string {
 }
 
 function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction: string, curr: string, remote: string, commit: string) {
-    if (pwd != "") {
-        tpwd = pwd;
-    }
-    if (conflictedFunctions != "") {
-        tconflictedFunctions = conflictedFunctions;
-    }
-    if (targetFunction != "") {
-        ttargetFunction = targetFunction;
-    }
-    if (curr != "") {
-        tcurr = curr;
-    }
-    if (remote != "") {
-        tremote = remote;
-    }
-    if (commit != "") {
-        tcommit = commit;
-    }
     const data = JSON.stringify({
-        pwd: tpwd,
-        conflicted_functions: tconflictedFunctions,
-        target_function: ttargetFunction,
-        curr: tcurr,
-        remote: tremote,
-        commit: tcommit
+        pwd,
+        conflicted_functions: conflictedFunctions,
+        target_function: targetFunction,
+        curr,
+        remote,
+        commit,
+        direct_only: true
     });
+
     if (socket.readyState === WebSocket.OPEN) {
         socket.send(data);
-    }else {
-        socket.addEventListener('open', () => socket.send(data), {once: true});
+    } else {
+        socket.addEventListener('open', () => socket.send(data), { once: true });
     }
 }
 
@@ -401,32 +393,28 @@ function startReactAndPreview(context: vscode.ExtensionContext): void {
     }, 4000);
 }
 
-// code for showInformationMessage() 
-// notification of mc hammer wants to run command with buttons - pass in the command we want to run after approval
-// returns if it ran, was rejected, or dismissed 
-export async function runApprovedCommand(command: string, context: vscode.ExtensionContext): Promise<'ran' | 'rejected' | 'dismissed'> {
+export async function runApprovedCommand(context: vscode.ExtensionContext, pwd: string, conflictedFunctions: string, targetFunction: string, curr: string, remote: string, commit: string): Promise<'ran' | 'rejected' | 'dismissed'> {
     const result = await vscode.window.showInformationMessage(
-        `MC Hammer wants to run: ${command}`,
+        `MC Hammer wants to work its magic}`,
         { modal: true },
         'Run it',
         'Reject'
     );
 
     if (result === 'Run it') {
-        const terminal = getTerminal();
-        terminal.show();
-        terminal.sendText(command);
 
-        const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (dir) {
-            vscode.env.clipboard.writeText(dir);
-            vscode.window.showInformationMessage(`Copied dir: ${dir}`);
-            sendToBackend(dir, "", "", "", "", "");
-            vscode.window.showInformationMessage('Sent directory to backend!');
-            startReactAndPreview(context);
-        }else {
-            vscode.window.showInformationMessage('Failed');
-        }
+        sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit);
+        startReactAndPreview(context);
+        // const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        // if (dir) {
+        //     vscode.env.clipboard.writeText(dir);
+        //     vscode.window.showInformationMessage(`Copied dir: ${dir}`);
+        //     sendToBackend(dir, "", "", "", "", "");
+        //     vscode.window.showInformationMessage('Sent directory to backend!');
+        //     startReactAndPreview(context);
+        // } else {
+        //     vscode.window.showInformationMessage('Failed');
+        // }
         return 'ran';
     }
 
@@ -434,38 +422,32 @@ export async function runApprovedCommand(command: string, context: vscode.Extens
         return 'rejected';
     }
 
-    // covers dismissing the modal (escape key or clicking outside)
     return 'dismissed';
 }
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "mc-hammer" is now active!');
 
-    // status bar item that appears when a merge conflict is detected in a python file
-    // clicking it triggers the hammer pipeline
     const conflictStatusBar = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left,
         100
     );
     conflictStatusBar.text = '🔨 MC Hammer: Merge Conflict Detected';
-    conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground'); // red background
-    conflictStatusBar.command = 'mc-hammer.buttonClicked'; // clicking triggers the pipeline
+    conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    conflictStatusBar.command = 'mc-hammer.buttonClicked';
     conflictStatusBar.tooltip = 'Click to run MC Hammer on merge conflicts';
-    conflictStatusBar.hide(); // hidden until a conflict is detected
+    conflictStatusBar.hide();
     context.subscriptions.push(conflictStatusBar);
 
-    // watch for merge conflicts appearing in python files automatically
     const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');
     watcher.onDidChange(async (uri) => {
         const doc = await vscode.workspace.openTextDocument(uri);
         if (doc.getText().includes('<<<<<<<')) {
-            // show the status bar item so user knows a conflict was detected
             conflictStatusBar.show();
             vscode.window.showInformationMessage(
                 `MC Hammer detected a merge conflict in ${uri.fsPath}`
             );
         } else {
-            // hide it if conflicts are resolved
             conflictStatusBar.hide();
         }
     });
@@ -475,12 +457,11 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage('Hello! from mc-hammer!');
     });
 
-    // registers the hammer button in the editor title bar
-	const hammerButton = vscode.commands.registerCommand('mc-hammer.buttonClicked', () => {
-		buttonClicked().catch(err => {
-			vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
-		});
-	});
+    const hammerButton = vscode.commands.registerCommand('mc-hammer.buttonClicked', () => {
+        buttonClicked(context).catch(err => {
+            vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
+        });
+    });
 
     context.subscriptions.push(disposable);
     context.subscriptions.push(hammerButton);

@@ -72,6 +72,19 @@ def get_project_root() -> Path:
     return next(p for p in Path(__file__).absolute().parents if (p / ".git").exists())
 
 def extract_functions(filepath: str) -> list[FunctionInfo]:
+    def _strip_conflict_markers(text: str) -> str:
+        cleaned_lines = []
+        for line in text.splitlines(keepends=True):
+            stripped = line.lstrip()
+            if (
+                stripped.startswith("<<<<<<< ")
+                or stripped.startswith("=======")
+                or stripped.startswith(">>>>>>> ")
+            ):
+                continue
+            cleaned_lines.append(line)
+        return "".join(cleaned_lines)
+
     try:
         with open(filepath, encoding="utf-8", errors="ignore") as f:
             source = f.read()
@@ -81,8 +94,17 @@ def extract_functions(filepath: str) -> list[FunctionInfo]:
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError):
-        # Skip files that cannot be parsed to avoid aborting large scans.
-        return []
+        # Best-effort parse for unresolved merge conflicts:
+        # ignore marker lines and retry so conflicted functions still appear.
+        cleaned_source = _strip_conflict_markers(source)
+        if cleaned_source == source:
+            return []
+        try:
+            tree = ast.parse(cleaned_source)
+            lines = cleaned_source.splitlines(keepends=True)
+        except (SyntaxError, ValueError):
+            # Skip files that cannot be parsed to avoid aborting large scans.
+            return []
     extractor = FunctionExtractor(lines)
     extractor.visit(tree)
     return extractor.functions
