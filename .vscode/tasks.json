@@ -12,6 +12,7 @@
             "presentation": {
                 "reveal": "never"
             },
+            "problemMatcher": [],
             "group": {
                 "kind": "build",
                 "isDefault": true
