@@ -36,6 +36,56 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode = __toESM(require("vscode"));
+var cp = __toESM(require("child_process"));
+async function getConflictedFunctions() {
+  const cwd = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+  const result = {};
+  return new Promise((resolve) => {
+    cp.exec("git diff --name-only --diff-filter=U", { cwd }, async (err, stdout) => {
+      if (err || !stdout.trim()) {
+        resolve(result);
+        return;
+      }
+      const conflictedFiles = stdout.trim().split("\n").filter((f) => f.endsWith(".py"));
+      for (const filePath of conflictedFiles) {
+        const fullPath = `${cwd}/${filePath}`;
+        const doc = await vscode.workspace.openTextDocument(fullPath);
+        const lines = doc.getText().split("\n");
+        const functions = [];
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith("<<<<<<<")) {
+            for (let j = i; j >= 0; j--) {
+              if (lines[j].trimStart().startsWith("def ")) {
+                const funcName = lines[j].trim().split("(")[0].replace("def ", "");
+                if (!functions.includes(funcName)) {
+                  functions.push(funcName);
+                }
+                break;
+              }
+            }
+          }
+        }
+        if (functions.length > 0) {
+          result[filePath] = functions;
+        }
+      }
+      resolve(result);
+    });
+  });
+}
+async function buttonClicked() {
+  const terminal = getTerminal();
+  terminal.show();
+  terminal.sendText("git diff --name-only --diff-filter=U");
+  const conflictedFunctions = await getConflictedFunctions();
+  if (Object.keys(conflictedFunctions).length === 0) {
+    vscode.window.showInformationMessage("No merge conflicts detected in Python files.");
+    return;
+  }
+  vscode.window.showInformationMessage(
+    `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(", ")}`
+  );
+}
 var hammerTerminal;
 function getTerminal() {
   if (!hammerTerminal || hammerTerminal.exitStatus !== void 0) {
@@ -63,10 +113,37 @@ async function runApprovedCommand(command) {
 }
 function activate(context) {
   console.log('Congratulations, your extension "mc-hammer" is now active!');
+  const conflictStatusBar = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    100
+  );
+  conflictStatusBar.text = "\u{1F528} MC Hammer: Merge Conflict Detected";
+  conflictStatusBar.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+  conflictStatusBar.command = "mc-hammer.buttonClicked";
+  conflictStatusBar.tooltip = "Click to run MC Hammer on merge conflicts";
+  conflictStatusBar.hide();
+  context.subscriptions.push(conflictStatusBar);
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.py");
+  watcher.onDidChange(async (uri) => {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    if (doc.getText().includes("<<<<<<<")) {
+      conflictStatusBar.show();
+      vscode.window.showInformationMessage(
+        `MC Hammer detected a merge conflict in ${uri.fsPath}`
+      );
+    } else {
+      conflictStatusBar.hide();
+    }
+  });
+  context.subscriptions.push(watcher);
   const disposable = vscode.commands.registerCommand("mc-hammer.helloWorld", () => {
     vscode.window.showInformationMessage("Hello! from mc-hammer!");
   });
+  const hammerButton = vscode.commands.registerCommand("mc-hammer.buttonClicked", () => {
+    buttonClicked();
+  });
   context.subscriptions.push(disposable);
+  context.subscriptions.push(hammerButton);
 }
 function deactivate() {
   hammerTerminal?.dispose();
