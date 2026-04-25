@@ -16,6 +16,9 @@ except ImportError:
 FUNCTION_INDEX: dict[str, tuple[object, str]] = {}
 graph_queue: asyncio.Queue = asyncio.Queue()
 MAX_AMBIGUOUS_CALLEE_LINKS = 8
+LATEST_COMMIT_MESSAGE = ""
+LATEST_REMOTE_CONTENT = ""
+LATEST_CURRENT_CONTENT = ""
 
 
 def build_dependency_graph(root: Path):
@@ -92,7 +95,6 @@ def format_function_context(function_name: str, file_path: str, function_source:
 def send_generate_tests_request(
     node: str,
     ancestors: set[str],
-    commit_message: str,
 ):
     node_info = FUNCTION_INDEX.get(node)
     if node_info is None:
@@ -160,7 +162,7 @@ def send_generate_tests_request(
 
     payload = {
         "file_content": file_content,
-        "commit_message": commit_message,
+        "commit_message": LATEST_COMMIT_MESSAGE,
         "readme_content": readme_content,
         "conflict_functions": conflict_functions,
         "ancestor_functions_other_files": dependent_functions_other_files,
@@ -184,8 +186,6 @@ def send_generate_tests_request(
 def send_generate_merge_request(
     node: str,
     ancestors: set[str],
-    remote_content: str,
-    current_content: str,
 ):
     node_info = FUNCTION_INDEX.get(node)
     if node_info is None:
@@ -253,8 +253,8 @@ def send_generate_merge_request(
 
     payload = {
         "file_content": file_content,
-        "commit_message_a": remote_content,
-        "commit_message_b": current_content,
+        "commit_message_a": LATEST_REMOTE_CONTENT,
+        "commit_message_b": LATEST_CURRENT_CONTENT,
         "conflict_functions": conflict_functions,
         "ancestor_functions_other_files": dependent_functions_other_files,
     }
@@ -430,6 +430,7 @@ def to_react_flow(G: nx.DiGraph) -> dict:
 
 
 async def handler(websocket):
+    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT
     payload_raw = await websocket.recv()
     direct_only = False
     pwd = ""
@@ -459,6 +460,10 @@ async def handler(websocket):
         direct_only = bool(payload.get("direct_only", payload.get("directOnly", direct_only)))
     elif isinstance(payload, str):
         pwd = payload
+
+    LATEST_CURRENT_CONTENT = curr
+    LATEST_REMOTE_CONTENT = remote
+    LATEST_COMMIT_MESSAGE = commit
 
     await websocket.send(json.dumps({"type": "ack", "message": "Building graph..."}))
 
