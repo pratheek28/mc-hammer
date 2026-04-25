@@ -30,6 +30,7 @@ def main():
             print(f"  Params: {fn.params}")
             print(f"  Returns: {fn.return_annotation}")
             print(f"  Calls: {fn.calls}")
+            print(f"Line number: {fn.lineno}")
 
     keys = list(dict.keys())
 
