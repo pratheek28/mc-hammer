@@ -207,6 +207,18 @@ function isGeneratedTestCase(value: unknown): value is GeneratedTestCase {
     return requiredFields.every((field) => typeof value[field] === 'string');
 }
 
+function flattenTestCaseCandidates(value: unknown): unknown[] {
+    if (!Array.isArray(value)) {
+        return [value];
+    }
+
+    const flattened: unknown[] = [];
+    for (const item of value) {
+        flattened.push(...flattenTestCaseCandidates(item));
+    }
+    return flattened;
+}
+
 function parseTestCasesPayload(rawPayload: unknown): GeneratedTestCase[] | null {
     let payload: unknown = rawPayload;
 
@@ -228,7 +240,9 @@ function parseTestCasesPayload(rawPayload: unknown): GeneratedTestCase[] | null 
     }
 
     if (Array.isArray(payload)) {
-        return payload.every(isGeneratedTestCase) ? payload : null;
+        const flattened = flattenTestCaseCandidates(payload);
+        const validCases = flattened.filter(isGeneratedTestCase);
+        return validCases.length > 0 ? validCases : null;
     }
 
     if (!isRecord(payload)) {
@@ -246,7 +260,9 @@ function parseTestCasesPayload(rawPayload: unknown): GeneratedTestCase[] | null 
         return null;
     }
 
-    return arrayCandidate.every(isGeneratedTestCase) ? arrayCandidate : null;
+    const flattened = flattenTestCaseCandidates(arrayCandidate);
+    const validCases = flattened.filter(isGeneratedTestCase);
+    return validCases.length > 0 ? validCases : null;
 }
 
 function parseJsonIfPossible(rawPayload: unknown): unknown {
@@ -530,6 +546,11 @@ export async function testCases(rawPayload: unknown): Promise<void> {
         const doc = await vscode.workspace.openTextDocument(outputPath);
         await vscode.window.showTextDocument(doc, { preview: false });
         vscode.window.showInformationMessage(`MC Hammer generated testcase runner: ${generatedFileName}`);
+
+        const terminal = getTerminal();
+        terminal.show();
+        terminal.sendText(`cd ${quoteForShell(workspacePath)}`);
+        terminal.sendText(`python3 ${quoteForShell(outputPath)} || python ${quoteForShell(outputPath)}`);
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         vscode.window.showErrorMessage(`MC Hammer failed to generate testcase runner: ${message}`);

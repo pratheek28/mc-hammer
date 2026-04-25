@@ -192,6 +192,16 @@ function isGeneratedTestCase(value) {
   ];
   return requiredFields.every((field) => typeof value[field] === "string");
 }
+function flattenTestCaseCandidates(value) {
+  if (!Array.isArray(value)) {
+    return [value];
+  }
+  const flattened = [];
+  for (const item of value) {
+    flattened.push(...flattenTestCaseCandidates(item));
+  }
+  return flattened;
+}
 function parseTestCasesPayload(rawPayload) {
   let payload = rawPayload;
   if (typeof rawPayload === "string") {
@@ -210,7 +220,9 @@ function parseTestCasesPayload(rawPayload) {
     }
   }
   if (Array.isArray(payload)) {
-    return payload.every(isGeneratedTestCase) ? payload : null;
+    const flattened2 = flattenTestCaseCandidates(payload);
+    const validCases2 = flattened2.filter(isGeneratedTestCase);
+    return validCases2.length > 0 ? validCases2 : null;
   }
   if (!isRecord(payload)) {
     return null;
@@ -219,7 +231,9 @@ function parseTestCasesPayload(rawPayload) {
   if (!Array.isArray(arrayCandidate)) {
     return null;
   }
-  return arrayCandidate.every(isGeneratedTestCase) ? arrayCandidate : null;
+  const flattened = flattenTestCaseCandidates(arrayCandidate);
+  const validCases = flattened.filter(isGeneratedTestCase);
+  return validCases.length > 0 ? validCases : null;
 }
 function parseJsonIfPossible(rawPayload) {
   if (typeof rawPayload !== "string") {
@@ -446,6 +460,10 @@ async function testCases(rawPayload) {
     const doc = await vscode.workspace.openTextDocument(outputPath);
     await vscode.window.showTextDocument(doc, { preview: false });
     vscode.window.showInformationMessage(`MC Hammer generated testcase runner: ${generatedFileName}`);
+    const terminal = getTerminal();
+    terminal.show();
+    terminal.sendText(`cd ${quoteForShell(workspacePath)}`);
+    terminal.sendText(`python3 ${quoteForShell(outputPath)} || python ${quoteForShell(outputPath)}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     vscode.window.showErrorMessage(`MC Hammer failed to generate testcase runner: ${message}`);
