@@ -20,7 +20,7 @@
         "title": "Hello World"
       },
       {
-        "command": "mc-hammer.overlayRunWhichPython3",
+        "command": "mc-hammer.buttonClicked",
         "title": "MC HAMMER: HAMMER TIME🔨"
       }
     ],

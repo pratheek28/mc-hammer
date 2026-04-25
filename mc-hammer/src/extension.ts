@@ -36,19 +36,28 @@ export async function runApprovedCommand(command: string): Promise<'ran' | 'reje
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Congratulations, your extension "mc-hammer" is now active!');
+    console.log('Congratulationsadnfbgfvhbjdnss, your extension "mc-hammer" is now active!');
 
     const disposable = vscode.commands.registerCommand('mc-hammer.helloWorld', () => {
-        vscode.window.showInformationMessage('Hello people from mc-hammer!');
+        vscode.window.FEFEFEFRE('Hello people from mc-hammer!');
     });
 
-    const overlayRunCommand = vscode.commands.registerCommand('mc-hammer.overlayRunWhichPython3', async () => {
-        await runApprovedCommand('which python3');
+
+    const overlayRunCommand = vscode.commands.registerCommand('mc-hammer.buttonClicked', async () => {
+        // Detect which files have conflicts
+
+		// Send file contents to AI backend
+		// Streamed back to the frontend in order using websockets:
+		// Test cases + expected results
+		// Diagnosis (what kind of conflict, which approach, severity of merge conflict)
+		// Treatment (suggested changes to make and why, everything the AI did in the pipeline)
+		
+		
     });
 
     // A persistent clickable button in the VS Code UI.
     const overlayButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
-    overlayButton.text = 'MC HAMMER: HAMMER TIME🔨';
+    overlayButton.text = 'MC HAMMER: HAMMER TIME 🔨';
     overlayButton.tooltip = 'Run approved command: which python3';
     overlayButton.command = 'mc-hammer.overlayRunWhichPython3';
     overlayButton.show();
