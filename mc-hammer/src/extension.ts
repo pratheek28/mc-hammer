@@ -143,7 +143,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(conflictStatusBar);
 
     // watch for merge conflicts appearing in python files automatically
-    const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');
+    const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');git
     watcher.onDidChange(async (uri) => {
         const doc = await vscode.workspace.openTextDocument(uri);
         if (doc.getText().includes('<<<<<<<')) {
