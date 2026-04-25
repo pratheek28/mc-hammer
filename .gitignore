@@ -1,6 +1,6 @@
 backend/.venv
 backend/__pycache__
 node_modules
-.vscode/
-.vscode-test/
-mc-hammer/dist/
+mc-hammer/.vscode-test/
+mc-hammer/dist/extension.js
+mc-hammer/dist/extension.js.map

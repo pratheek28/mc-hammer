@@ -37,6 +37,10 @@ __export(extension_exports, {
 module.exports = __toCommonJS(extension_exports);
 var vscode = __toESM(require("vscode"));
 var cp = __toESM(require("child_process"));
+var path = __toESM(require("path"));
+var hammerTerminal;
+var reactTerminal;
+var socket = new WebSocket("ws://127.0.0.1:8765");
 async function getConflictedFunctions() {
   const workspaceFolders = vscode.workspace.workspaceFolders;
   console.log("[MC Hammer] workspaceFolders:", workspaceFolders?.map((f) => f.uri.fsPath));
@@ -102,14 +106,36 @@ async function buttonClicked() {
     `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(", ")}`
   );
 }
-var hammerTerminal;
 function getTerminal() {
   if (!hammerTerminal || hammerTerminal.exitStatus !== void 0) {
     hammerTerminal = vscode.window.createTerminal("MC Hammer");
   }
   return hammerTerminal;
 }
-async function runApprovedCommand(command) {
+function sendToBackend(data) {
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(data);
+  } else {
+    socket.addEventListener("open", () => socket.send(data), { once: true });
+  }
+}
+function startReactAndPreview(context) {
+  if (!reactTerminal || reactTerminal.exitStatus !== void 0) {
+    const dependencyGraphUIPath = path.join(context.extensionPath, "dependency-graph-ui");
+    reactTerminal = vscode.window.createTerminal({
+      name: "Dependency Graph UI",
+      cwd: dependencyGraphUIPath
+    });
+    reactTerminal.sendText("npm run dev");
+  }
+  setTimeout(() => {
+    vscode.commands.executeCommand(
+      "simpleBrowser.show",
+      "http://localhost:5173"
+    );
+  }, 4e3);
+}
+async function runApprovedCommand(command, context) {
   const result = await vscode.window.showInformationMessage(
     `MC Hammer wants to run: ${command}`,
     { modal: true },
@@ -120,6 +146,16 @@ async function runApprovedCommand(command) {
     const terminal = getTerminal();
     terminal.show();
     terminal.sendText(command);
+    const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (dir) {
+      vscode.env.clipboard.writeText(dir);
+      vscode.window.showInformationMessage(`Copied dir: ${dir}`);
+      sendToBackend(dir);
+      vscode.window.showInformationMessage("Sent directory to backend!");
+      startReactAndPreview(context);
+    } else {
+      vscode.window.showInformationMessage("Failed");
+    }
     return "ran";
   }
   if (result === "Reject") {
@@ -165,6 +201,7 @@ function activate(context) {
 }
 function deactivate() {
   hammerTerminal?.dispose();
+  reactTerminal?.dispose();
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

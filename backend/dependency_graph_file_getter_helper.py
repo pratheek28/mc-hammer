@@ -83,7 +83,7 @@ def extract_functions(filepath: str) -> list[FunctionInfo]:
 def get_all_files(root: Path, dir_queue: deque, file_queue: deque):
     while dir_queue:
         current = dir_queue.popleft()
-        if current.is_dir() and current.name != ".venv":
+        if current.is_dir() and current.name != ".venv" and current.name != "__pycache__" and current.name != ".git" and current.name != ".vscode" and current.name != "node_modules":
             for entry in current.iterdir():
                 dir_queue.append(entry)
         elif current.is_file() and current.suffix == ".py":

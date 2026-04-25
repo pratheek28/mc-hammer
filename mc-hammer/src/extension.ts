@@ -1,5 +1,11 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as path from 'path';
+
+let hammerTerminal: vscode.Terminal | undefined;
+let reactTerminal: vscode.Terminal | undefined;
+
+const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 
 // uses git diff to get list of conflicted python files, then scans each file
 // for conflict markers and finds the enclosing python function
@@ -91,8 +97,6 @@ async function buttonClicked() {
     // assuming backend is python rn so we're scoped to python functions only
 }
 
-let hammerTerminal: vscode.Terminal | undefined; // variable that holds a reference to the MC Hammer terminal
-
 // this is for putting in all commands in one singular terminal so everytime runApprovedCommand is called, it will reuse the same terminal if it exists
 function getTerminal(): vscode.Terminal {
     if (!hammerTerminal || hammerTerminal.exitStatus !== undefined) {
@@ -101,9 +105,36 @@ function getTerminal(): vscode.Terminal {
     return hammerTerminal;
 }
 
+function sendToBackend(data: string) {
+    if (socket.readyState === WebSocket.OPEN) {
+        socket.send(data);
+    }else {
+        socket.addEventListener('open', () => socket.send(data), {once: true});
+    }
+}
+
+function startReactAndPreview(context: vscode.ExtensionContext): void {
+    if (!reactTerminal || reactTerminal.exitStatus !== undefined) {
+        const dependencyGraphUIPath = path.join(context.extensionPath, 'dependency-graph-ui');
+        reactTerminal = vscode.window.createTerminal({
+            name: "Dependency Graph UI",
+            cwd: dependencyGraphUIPath
+        });
+        reactTerminal.sendText('npm run dev');
+    }
+
+    setTimeout(() => {
+        vscode.commands.executeCommand(
+            'simpleBrowser.show',
+            'http://localhost:5173'
+        );
+    }, 4000);
+}
+
+// code for showInformationMessage() 
 // notification of mc hammer wants to run command with buttons - pass in the command we want to run after approval
-// returns if it ran, was rejected, or dismissed
-export async function runApprovedCommand(command: string): Promise<'ran' | 'rejected' | 'dismissed'> {
+// returns if it ran, was rejected, or dismissed 
+export async function runApprovedCommand(command: string, context: vscode.ExtensionContext): Promise<'ran' | 'rejected' | 'dismissed'> {
     const result = await vscode.window.showInformationMessage(
         `MC Hammer wants to run: ${command}`,
         { modal: true },
@@ -115,6 +146,17 @@ export async function runApprovedCommand(command: string): Promise<'ran' | 'reje
         const terminal = getTerminal();
         terminal.show();
         terminal.sendText(command);
+
+        const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (dir) {
+            vscode.env.clipboard.writeText(dir);
+            vscode.window.showInformationMessage(`Copied dir: ${dir}`);
+            sendToBackend(dir);
+            vscode.window.showInformationMessage('Sent directory to backend!');
+            startReactAndPreview(context);
+        }else {
+            vscode.window.showInformationMessage('Failed');
+        }
         return 'ran';
     }
 
@@ -143,7 +185,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(conflictStatusBar);
 
     // watch for merge conflicts appearing in python files automatically
-    const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');git
+    const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');
     watcher.onDidChange(async (uri) => {
         const doc = await vscode.workspace.openTextDocument(uri);
         if (doc.getText().includes('<<<<<<<')) {
@@ -176,4 +218,5 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     hammerTerminal?.dispose();
+    reactTerminal?.dispose();
 }
