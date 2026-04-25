@@ -163,6 +163,191 @@ let ttargetFunction="";
 let tcurr="";
 let tremote="";
 let tcommit="";
+let latestGeneratedTestCases: GeneratedTestCase[] | null = null;
+
+interface GeneratedTestCase {
+    filename: string;
+    functionName: string;
+    testName: string;
+    setup: string;
+    call: string;
+    expected_return: string;
+    expected_side_effects: string;
+    description: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+}
+
+function isGeneratedTestCase(value: unknown): value is GeneratedTestCase {
+    if (!isRecord(value)) {
+        return false;
+    }
+
+    const requiredFields: Array<keyof GeneratedTestCase> = [
+        'filename',
+        'functionName',
+        'testName',
+        'setup',
+        'call',
+        'expected_return',
+        'expected_side_effects',
+        'description'
+    ];
+
+    return requiredFields.every((field) => typeof value[field] === 'string');
+}
+
+function parseTestCasesPayload(rawPayload: unknown): GeneratedTestCase[] | null {
+    let payload: unknown = rawPayload;
+
+    if (typeof rawPayload === 'string') {
+        const trimmed = rawPayload.trim();
+        if (!trimmed) {
+            return null;
+        }
+
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                payload = JSON.parse(trimmed);
+            } catch {
+                return null;
+            }
+        } else {
+            return null;
+        }
+    }
+
+    if (Array.isArray(payload)) {
+        return payload.every(isGeneratedTestCase) ? payload : null;
+    }
+
+    if (!isRecord(payload)) {
+        return null;
+    }
+
+    const arrayCandidate =
+        payload.testcases ??
+        payload.testCases ??
+        payload.test_cases ??
+        payload.cases ??
+        payload.payload;
+
+    if (!Array.isArray(arrayCandidate)) {
+        return null;
+    }
+
+    return arrayCandidate.every(isGeneratedTestCase) ? arrayCandidate : null;
+}
+
+function parseJsonIfPossible(rawPayload: unknown): unknown {
+    if (typeof rawPayload !== 'string') {
+        return rawPayload;
+    }
+
+    const trimmed = rawPayload.trim();
+    if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) {
+        return rawPayload;
+    }
+
+    try {
+        return JSON.parse(trimmed);
+    } catch {
+        return rawPayload;
+    }
+}
+
+function getModuleName(filename: string): string {
+    const normalized = filename.replace(/\\/g, '/');
+    const withoutExtension = normalized.endsWith('.py') ? normalized.slice(0, -3) : normalized;
+    const basename = withoutExtension.split('/').pop() ?? withoutExtension;
+    return basename.trim();
+}
+
+function toPythonIdentifier(value: string): string {
+    const normalized = value.trim().replace(/[^a-zA-Z0-9_]/g, '_').replace(/^[^a-zA-Z_]+/, '');
+    return normalized || 'generated_test';
+}
+
+function indentPythonBlock(text: string, level = 1): string {
+    const indent = '    '.repeat(level);
+    const lines = text.replace(/\r\n/g, '\n').split('\n');
+    return lines.map((line) => (line.trim() ? `${indent}${line}` : '')).join('\n');
+}
+
+function buildCallSnippet(call: string): string {
+    const trimmed = call.trim();
+    if (!trimmed) {
+        return 'result = None';
+    }
+
+    const normalizedLines = call.replace(/\r\n/g, '\n').split('\n');
+    const hasResultAssignment = normalizedLines.some((line) => line.trimStart().startsWith('result'));
+    if (hasResultAssignment) {
+        return normalizedLines.join('\n');
+    }
+
+    if (normalizedLines.length === 1) {
+        return `result = ${normalizedLines[0]}`;
+    }
+
+    return ['_mc_hammer_call = (', ...normalizedLines, ')', 'result = _mc_hammer_call'].join('\n');
+}
+
+function buildPythonTestRunner(testCases: GeneratedTestCase[]): string {
+    const importLines = [...new Set(testCases.map((testCase) => {
+        const moduleName = getModuleName(testCase.filename);
+        return `from ${moduleName} import ${testCase.functionName}`;
+    }))].sort();
+
+    const testFunctions = testCases.map((testCase) => {
+        const functionName = toPythonIdentifier(testCase.testName);
+        const setupBlock = indentPythonBlock(testCase.setup, 1);
+        const callBlock = indentPythonBlock(buildCallSnippet(testCase.call), 1);
+        const expectedLine = `    expected = ${testCase.expected_return}`;
+        const returnLine = `    return ${JSON.stringify(testCase.testName)}, result, expected`;
+
+        return [
+            `def ${functionName}():`,
+            setupBlock,
+            callBlock,
+            expectedLine,
+            returnLine
+        ].join('\n');
+    });
+
+    const mainLines = [
+        'def main():',
+        '    tests = ['
+    ];
+
+    for (const testCase of testCases) {
+        mainLines.push(`        (${JSON.stringify(testCase.functionName)}, ${toPythonIdentifier(testCase.testName)}),`);
+    }
+
+    mainLines.push(
+        '    ]',
+        '',
+        '    for function_name, test in tests:',
+        '        test_name, actual, expected = test()',
+        '        if actual == expected:',
+        '            print(f"{function_name},{test_name}, SUCCESS")',
+        '        else:',
+        '            print(f"{function_name},{test_name}, FAIL (expected={expected!r}, actual={actual!r})")',
+        '',
+        "if __name__ == '__main__':",
+        '    main()'
+    );
+
+    return [
+        '# Auto-generated by MC Hammer',
+        ...importLines,
+        '',
+        ...testFunctions.flatMap((fnBody) => [fnBody, '']),
+        ...mainLines
+    ].join('\n');
+}
 
 function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction: string, curr: string, remote: string, commit: string) {
     if (pwd != "") {
@@ -300,11 +485,74 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(disposable);
     context.subscriptions.push(hammerButton);
 
+    const buildTestRunnerButton = vscode.window.createStatusBarItem(
+        vscode.StatusBarAlignment.Left,
+        99
+    );
+    buildTestRunnerButton.text = '$(beaker) MC Hammer: Build Tests';
+    buildTestRunnerButton.command = 'mc-hammer.buildTestCaseRunner';
+    buildTestRunnerButton.tooltip = 'Generate temporary Python testcase runner from latest backend testcase payload';
+    buildTestRunnerButton.show();
+    context.subscriptions.push(buildTestRunnerButton);
+
+    const testRunnerBuilderCommand = vscode.commands.registerCommand('mc-hammer.buildTestCaseRunner', async () => {
+        if (!latestGeneratedTestCases || latestGeneratedTestCases.length === 0) {
+            vscode.window.showWarningMessage('No testcase payload received yet. Run MC Hammer generation first.');
+            return;
+        }
+
+        await testCases(latestGeneratedTestCases);
+    });
+    context.subscriptions.push(testRunnerBuilderCommand);
+
 	//listen for messages from the backend 
 	socket.addEventListener('message', (event) => {
-		const command = event.data;
+		const parsedMessage = parseJsonIfPossible(event.data);
+		const wrappedPayload = isRecord(parsedMessage) && parsedMessage.type === 'generated_testcases'
+            ? parsedMessage.payload
+            : parsedMessage;
+
+		const testCasePayload = parseTestCasesPayload(wrappedPayload);
+		if (testCasePayload) {
+            latestGeneratedTestCases = testCasePayload;
+			testCases(testCasePayload).catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				vscode.window.showErrorMessage(`MC Hammer testcase runner error: ${message}`);
+			});
+			return;
+		}
+
+		const command = typeof event.data === 'string' ? event.data : String(event.data);
 		runApprovedCommand(command, context);
 	});
+}
+
+export async function testCases(rawPayload: unknown): Promise<void> {
+    const parsedTestCases = parseTestCasesPayload(rawPayload);
+    if (!parsedTestCases || parsedTestCases.length === 0) {
+        vscode.window.showErrorMessage('MC Hammer: Invalid testcase payload received from backend.');
+        return;
+    }
+
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspacePath) {
+        vscode.window.showErrorMessage('MC Hammer: No workspace folder found for testcase generation.');
+        return;
+    }
+
+    const generatedFileName = `mc_hammer_temp_tests_${Date.now()}.py`;
+    const outputPath = path.join(workspacePath, generatedFileName);
+    const fileContent = buildPythonTestRunner(parsedTestCases);
+
+    try {
+        await fs.writeFile(outputPath, fileContent, 'utf8');
+        const doc = await vscode.workspace.openTextDocument(outputPath);
+        await vscode.window.showTextDocument(doc, { preview: false });
+        vscode.window.showInformationMessage(`MC Hammer generated testcase runner: ${generatedFileName}`);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        vscode.window.showErrorMessage(`MC Hammer failed to generate testcase runner: ${message}`);
+    }
 }
 
 export function deactivate() {

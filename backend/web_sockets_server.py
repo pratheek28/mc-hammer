@@ -19,6 +19,7 @@ MAX_AMBIGUOUS_CALLEE_LINKS = 8
 LATEST_COMMIT_MESSAGE = ""
 LATEST_REMOTE_CONTENT = ""
 LATEST_CURRENT_CONTENT = ""
+LATEST_GENERATED_TESTCASES = None
 
 
 def build_dependency_graph(root: Path):
@@ -96,9 +97,11 @@ def send_generate_tests_request(
     node: str,
     ancestors: set[str],
 ):
+    global LATEST_GENERATED_TESTCASES
     node_info = FUNCTION_INDEX.get(node)
     if node_info is None:
         print(f"[generate-tests] Node not found in index: {node}")
+        LATEST_GENERATED_TESTCASES = None
         return
 
     node_fn, node_file_path = node_info
@@ -176,10 +179,14 @@ def send_generate_tests_request(
             websocket.send(json.dumps(payload))
             response = websocket.recv()
             try:
-                print("[generate-tests] Response JSON:", json.loads(response))
+                parsed_response = json.loads(response)
+                LATEST_GENERATED_TESTCASES = parsed_response
+                print("[generate-tests] Response JSON:", parsed_response)
             except (TypeError, ValueError):
+                LATEST_GENERATED_TESTCASES = response
                 print("[generate-tests] Response text:", response)
     except Exception as e:
+        LATEST_GENERATED_TESTCASES = None
         print(f"[generate-tests] WebSocket request failed: {e}")
 
 
@@ -435,7 +442,7 @@ def to_react_flow(G: nx.DiGraph) -> dict:
 
 
 async def handler(websocket):
-    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT
+    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_GENERATED_TESTCASES
     payload_raw = await websocket.recv()
     direct_only = False
     pwd = ""
@@ -444,6 +451,7 @@ async def handler(websocket):
     curr = ""
     remote = ""
     commit = ""
+    print(f"Received payload: {payload_raw}")
 
     # Backward compatible:
     # - If payload is a plain string, treat it as project path.
@@ -486,6 +494,16 @@ async def handler(websocket):
         return
 
     await graph_queue.put(graph_data)
+
+    if LATEST_GENERATED_TESTCASES:
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "generated_testcases",
+                    "payload": LATEST_GENERATED_TESTCASES
+                }
+            )
+        )
 
 async def react_flow_server(websocket):
     try:
