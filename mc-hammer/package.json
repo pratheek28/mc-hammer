@@ -9,9 +9,6 @@
   "categories": [
     "Other"
   ],
-  "extensionDependencies": [
-    "ms-vscode.live-server"
-  ],
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -23,14 +20,14 @@
         "title": "Hello World"
       },
       {
-        "command": "mc-hammer.overlayRunWhichPython3",
+        "command": "mc-hammer.buttonClicked",
         "title": "MC HAMMER: HAMMER TIME🔨"
       }
     ],
     "menus": {
       "editor/title": [
         {
-          "command": "mc-hammer.overlayRunWhichPython3",
+          "command": "mc-hammer.buttonClicked",
           "group": "navigation@100"
         }
       ]
