@@ -25,22 +25,7 @@ export async function runApprovedCommand(command: string): Promise<'ran' | 'reje
         const terminal = getTerminal();
 		terminal.show();
         terminal.sendText(command);
-        return 'ran';
-    }
 
-    if (result === 'Reject') {
-        return 'rejected';
-    }
-
-    return 'dismissed';
-}
-
-export function activate(context: vscode.ExtensionContext) {
-    console.log('Congratulationsadnfbgfvhbjdnss, your extension "mc-hammer" is now active!');
-
-    const disposable = vscode.commands.registerCommand('mc-hammer.helloWorld', () => {
-        vscode.window.FEFEFEFRE('Hello people from mc-hammer!');
-    });
 
 
     const overlayRunCommand = vscode.commands.registerCommand('mc-hammer.buttonClicked', async () => {
@@ -62,9 +47,4 @@ export function activate(context: vscode.ExtensionContext) {
     overlayButton.command = 'mc-hammer.overlayRunWhichPython3';
     overlayButton.show();
 
-    context.subscriptions.push(disposable, overlayRunCommand, overlayButton);
-}
-
-export function deactivate() {
-    hammerTerminal?.dispose();
-}
+    context.subscriptions.push(dis
