@@ -8,6 +8,8 @@ import networkx as nx
 
 graph_data = {"nodes": [], "edges": []}
 data_ready = asyncio.Event()
+FUNCTION_INDEX: dict[str, tuple[object, str]] = {}
+
 
 def build_dependency_graph(root: Path):
     G = nx.DiGraph()
@@ -22,6 +24,7 @@ def build_dependency_graph(root: Path):
         for fn in functions:
             if fn.name not in fn_dict:
                 fn_dict[fn.name] = fn
+                FUNCTION_INDEX[fn.name] = (fn, str(current))
 
     for key, fn in fn_dict.items():
         G.add_node(key)
@@ -29,6 +32,126 @@ def build_dependency_graph(root: Path):
             if call in fn_dict:
                 G.add_edge(key, call)
     return G
+
+def get_function_source_from_file(
+    function_name: str,
+    file_path: str,
+    lineno_hint: int | None = None,
+) -> str | None:
+    try:
+        functions = extract_functions(file_path)
+    except Exception as e:
+        print(f"[generate-tests] Failed to parse {file_path}: {e}")
+        return None
+
+    if lineno_hint is not None:
+        for fn in functions:
+            if fn.name == function_name and fn.lineno == lineno_hint:
+                return fn.source
+
+    for fn in functions:
+        if fn.name == function_name:
+            return fn.source
+
+    return None
+
+def format_function_context(function_name: str, file_path: str, function_source: str) -> str:
+    return (
+        f"file_name: {file_path}\n"
+        f"function_name: {function_name}\n"
+        "function_content:\n"
+        f"{function_source}"
+    )
+
+def send_generate_tests_request(
+    node: str,
+    ancestors: set[str],
+):
+    node_info = FUNCTION_INDEX.get(node)
+    if node_info is None:
+        print(f"[generate-tests] Node not found in index: {node}")
+        return
+
+    node_fn, node_file_path = node_info
+
+    try:
+        with open(node_file_path, "r", encoding="utf-8") as f:
+            raw_file_content = f.read()
+    except OSError as e:
+        print(f"[generate-tests] Failed to read file {node_file_path}: {e}")
+        return
+
+    file_content = (
+        f"file_name: {node_file_path}\n"
+        "file_content:\n"
+        f"{raw_file_content}"
+    )
+
+    readme_content = ""
+    readme_path = get_project_root() / "README.md"
+    try:
+        with open(readme_path, "r", encoding="utf-8") as f:
+            readme_content = (
+                f"file_name: {readme_path}\n"
+                "file_content:\n"
+                f"{f.read()}"
+            )
+    except OSError as e:
+        print(f"[generate-tests] Failed to read README at {readme_path}: {e}")
+
+    # Pull source from actual file line ranges at request-time.
+    node_source = get_function_source_from_file(node_fn.name, node_file_path, node_fn.lineno) or node_fn.source
+    conflict_functions = [format_function_context(node_fn.name, node_file_path, node_source)]
+    for ancestor in ancestors:
+        ancestor_info = FUNCTION_INDEX.get(ancestor)
+        if ancestor_info is None:
+            continue
+        ancestor_fn, ancestor_file_path = ancestor_info
+        if ancestor_file_path == node_file_path:
+            ancestor_source = (
+                get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
+                or ancestor_fn.source
+            )
+            conflict_functions.append(
+                format_function_context(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
+
+    dependent_functions_other_files = []
+    for ancestor in ancestors:
+        ancestor_info = FUNCTION_INDEX.get(ancestor)
+        if ancestor_info is None:
+            continue
+        ancestor_fn, ancestor_file_path = ancestor_info
+        if ancestor_file_path != node_file_path:
+            ancestor_source = (
+                get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
+                or ancestor_fn.source
+            )
+            dependent_functions_other_files.append(
+                format_function_context(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
+
+    payload = {
+        "file_content": file_content,
+        "commit_message": "testtttting",
+        "readme_content": readme_content,
+        "conflict_functions": conflict_functions,
+        "ancestor_functions_other_files": dependent_functions_other_files,
+    }
+    print(payload)
+    print("--------------------------------")
+    print("--------------------------------")
+    try:
+        ws_url = "ws://10.30.197.121:8000/generate-tests"
+        with connect(ws_url, open_timeout=10, close_timeout=10) as websocket:
+            websocket.send(json.dumps(payload))
+            response = websocket.recv()
+            try:
+                print("[generate-tests] Response JSON:", json.loads(response))
+            except (TypeError, ValueError):
+                print("[generate-tests] Response text:", response)
+    except Exception as e:
+        print(f"[generate-tests] WebSocket request failed: {e}")
 
 def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGraph:
     if direct_only:
