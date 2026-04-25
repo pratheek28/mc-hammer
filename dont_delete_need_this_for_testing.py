@@ -3,15 +3,14 @@ def test():
 
 def test2():
     return
-
-def test3():
-    return
+n
 
 def test4():
-    return
+    return 7
 
 def test5():
     return
 
 def test6():
+    input = 3
     return
