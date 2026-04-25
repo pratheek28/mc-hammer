@@ -411,9 +411,8 @@ def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGr
                     T.add_edge(source, target)\
                         
     send_generate_tests_request(node, ancestors)
-    send_generate_merge_request(node, ancestors)
-    send_generate_feedback_request(node, ancestors)
-    
+    # send_generate_merge_request(node, ancestors)
+    # send_generate_feedback_request(node, ancestors)
     return T
 
 def _fast_grid_positions(nodes: list[str], scale: float = 220.0) -> dict[str, tuple[float, float]]:
@@ -480,20 +479,20 @@ async def handler(websocket):
     if isinstance(payload, dict):
         # print(f"Payload: {payload}")
         pwd = payload.get("pwd", payload.get("tpwd", payload.get("path", "")))
-        print(f"PWD: {pwd}")
+        # print(f"PWD: {pwd}")
         conflicted_functions = payload.get("conflicted_functions", payload.get("tconflictedFunctions", ""))
-        print(f"Conflicted functions: {conflicted_functions}")
+        # print(f"Conflicted functions: {conflicted_functions}")
         conflicted_functions_map = _parse_conflicted_functions(conflicted_functions)
         target_function = payload.get("target_function", payload.get("ttargetFunction", payload.get("targetFunction", "")))
-        print(f"Target function: {target_function}")
+        # print(f"Target function: {target_function}")
         curr = payload.get("curr", payload.get("tcurr", ""))
-        print(f"Curr: {curr}")
+        # print(f"Curr: {curr}")
         remote = payload.get("remote", payload.get("tremote", ""))
-        print(f"Remote: {remote}")
+        # print(f"Remote: {remote}")
         commit = payload.get("commit", payload.get("tcommit", ""))
-        print(f"Commit: {commit}")
+        # print(f"Commit: {commit}")
         direct_only = bool(payload.get("direct_only", payload.get("directOnly", direct_only)))
-        print(f"Direct only: {direct_only}")
+        # print(f"Direct only: {direct_only}")
     elif isinstance(payload, str):
         pwd = payload
 
@@ -537,6 +536,11 @@ async def handler(websocket):
 
         T = await asyncio.to_thread(get_subgraph, G, target, direct_only)
         graph_data = await asyncio.to_thread(to_react_flow, T)
+        # ancestors = nx.ancestors(G, node)
+        # send_generate_tests_request(target, ancestors)
+        # send_generate_merge_request(target, ancestors)
+        # send_generate_feedback_request(target, ancestors)
+
     except Exception as exc:
         await graph_queue.put({"error": f"Failed to build graph: {exc}"})
         return

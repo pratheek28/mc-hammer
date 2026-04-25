@@ -503,8 +503,8 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		const command = typeof event.data === 'string' ? event.data : String(event.data);
-		runApprovedCommand(command, context);
+		// const command = typeof event.data === 'string' ? event.data : String(event.data);
+		// runApprovedCommand(command, context);
 	});
 }
 
