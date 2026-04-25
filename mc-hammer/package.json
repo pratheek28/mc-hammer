@@ -9,6 +9,9 @@
   "categories": [
     "Other"
   ],
+  "extensionDependencies": [
+    "ms-vscode.live-server"
+  ],
   "activationEvents": [
     "onStartupFinished"
   ],

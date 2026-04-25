@@ -36,12 +36,30 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode = __toESM(require("vscode"));
+var path = __toESM(require("path"));
 var hammerTerminal;
+var reactTerminal;
 function getTerminal() {
   if (!hammerTerminal || hammerTerminal.exitStatus !== void 0) {
     hammerTerminal = vscode.window.createTerminal("MC Hammer");
   }
   return hammerTerminal;
+}
+function startReactAndPreview(context) {
+  if (!reactTerminal || reactTerminal.exitStatus !== void 0) {
+    const dependencyGraphUIPath = path.join(context.extensionPath, "dependency-graph-ui");
+    reactTerminal = vscode.window.createTerminal({
+      name: "Dependency Graph UI",
+      cwd: dependencyGraphUIPath
+    });
+    reactTerminal.sendText("npm run dev");
+  }
+  setTimeout(() => {
+    vscode.commands.executeCommand(
+      "simpleBrowser.show",
+      "http://localhost:5173"
+    );
+  }, 4e3);
 }
 async function runApprovedCommand(command) {
   const result = await vscode.window.showInformationMessage(
@@ -63,6 +81,7 @@ async function runApprovedCommand(command) {
 }
 function activate(context) {
   console.log('Congratulations, your extension "mc-hammer" is now active!');
+  startReactAndPreview(context);
   const disposable = vscode.commands.registerCommand("mc-hammer.helloWorld", () => {
     vscode.window.showInformationMessage("Hello people from mc-hammer!");
   });
@@ -78,6 +97,7 @@ function activate(context) {
 }
 function deactivate() {
   hammerTerminal?.dispose();
+  reactTerminal?.dispose();
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
