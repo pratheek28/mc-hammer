@@ -1,46 +1,45 @@
 import { useState, useEffect } from "react";
+import type { Node, Edge } from "reactflow";
+
+type Status = "connecting" | "connected" | "receiving" | "done" | "error" | "disconnected";
 
 export function useGraphSocket(url: string) {
-  const [nodes, setNodes] = useState<any[]>([]);
-  const [edges, setEdges] = useState<any[]>([]);
-  const [status, setStatus] = useState<"connecting" | "connected" | "disconnected" | "error">("connecting");
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
+  const [status, setStatus] = useState<Status>("connecting");
 
   useEffect(() => {
-    console.log("useEffect running, creating WebSocket...");
     const ws = new WebSocket(url);
 
-    ws.onopen = () => {
-      console.log("WebSocket opened successfully");
-      setStatus("connected");
-    };
-
-    ws.onclose = (e) => {
-      console.log("WebSocket closed", { code: e.code, reason: e.reason, wasClean: e.wasClean });
-      setStatus("disconnected");
-    };
-
-    ws.onerror = (e) => {
-      console.error("WebSocket error", e);
-      setStatus("error");
-    };
+    ws.onopen = () => setStatus("connected");
 
     ws.onmessage = (event) => {
-      console.log("Message received:", event.data);
-      const data = JSON.parse(event.data);
-      switch (data.type) {
-        case "add_node":
-          setNodes((prev) => [...prev, data.node]);
-          break;
-        case "add_edge":
-          setEdges((prev) => [...prev, data.edge]);
-          break;
+      let msg: any;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {
+        return;
+      }
+
+      if (msg.type === "start") {
+        setStatus("receiving");
+        setNodes([]);
+        setEdges([]);
+      } else if (msg.type === "add_node") {
+        setNodes((prev) => [...prev, msg.node]);
+      } else if (msg.type === "add_edge") {
+        setEdges((prev) => [...prev, msg.edge]);
+      } else if (msg.type === "done") {
+        setStatus("done");
+      } else if (msg.type === "error") {
+        setStatus("error");
       }
     };
 
-    return () => {
-      console.log("useEffect cleanup — closing WebSocket");
-      ws.close();
-    };
+    ws.onerror = () => setStatus("error");
+    ws.onclose = () => setStatus("disconnected");
+
+    return () => ws.close();
   }, [url]);
 
   return { nodes, edges, status };
