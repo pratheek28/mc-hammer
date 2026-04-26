@@ -11,6 +11,7 @@ export class ConflictPetViewProvider implements vscode.WebviewViewProvider {
 
     private _view?: vscode.WebviewView;
     private _hasConflict = false;
+    private _isResolvingConflict = false;
 
     constructor(private readonly extensionUri: vscode.Uri) {}
 
