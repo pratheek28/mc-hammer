@@ -26,6 +26,17 @@ type InitialMessage = {
   graph: Record<string, unknown>;
 };
 
+type FunctionContext = {
+  function_name: string;
+  function_content: string;
+  file_name?: string;
+};
+
+type ChangedFileContent = {
+  file_name: string;
+  file_content: string;
+};
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -216,11 +227,74 @@ function normalizePayload(msg: any): MCQPayload | null {
   return null;
 }
 
+function normalizeFunctionContexts(rawValue: unknown): FunctionContext[] {
+  if (!Array.isArray(rawValue)) {
+    return [];
+  }
+
+  const parsedEntries: Array<FunctionContext | null> = rawValue.map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const functionName = (entry as Record<string, unknown>).function_name;
+      const functionContent = (entry as Record<string, unknown>).function_content;
+      const fileName = (entry as Record<string, unknown>).file_name;
+      if (typeof functionName !== "string" || typeof functionContent !== "string") {
+        return null;
+      }
+      return {
+        function_name: functionName,
+        function_content: functionContent,
+        file_name: typeof fileName === "string" ? fileName : undefined,
+      };
+    });
+
+  return parsedEntries.filter((entry): entry is FunctionContext => entry !== null);
+}
+
+function getGenerateTestsUrl(baseUrl: string): string {
+  try {
+    const parsed = new URL(baseUrl);
+    parsed.pathname = "/generate-tests";
+    parsed.search = "";
+    parsed.hash = "";
+    console.log("Derived generate-tests URL:", parsed.toString());
+    return parsed.toString();
+  } catch {
+    console.log("Failed to parse base URL, falling back to default generate-tests URL");
+    return "ws://10.30.197.121:8050/generate-tests";
+  }
+}
+
+function normalizeChangedFiles(rawValue: unknown): ChangedFileContent[] {
+  if (!Array.isArray(rawValue)) {
+    return [];
+  }
+
+  const parsedEntries: Array<ChangedFileContent | null> = rawValue.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return null;
+    }
+    const fileName = (entry as Record<string, unknown>).file_name;
+    const fileContent = (entry as Record<string, unknown>).file_content;
+    if (typeof fileName !== "string" || typeof fileContent !== "string") {
+      return null;
+    }
+    return { file_name: fileName, file_content: fileContent };
+  });
+
+  return parsedEntries.filter((entry): entry is ChangedFileContent => entry !== null);
+}
+
 export function useQuestionSocket(url: string) {
   const [question, setQuestion] = useState<MCQPayload | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
   const wsRef = useRef<WebSocket | null>(null);
-  
+  const latestCommitMessageRef = useRef<string>("");
+  const latestAffectedFunctionsRef = useRef<FunctionContext[]>([]);
+  const latestAncestorFunctionsRef = useRef<FunctionContext[]>([]);
+  const latestChangedFilesRef = useRef<ChangedFileContent[]>([]);
+
   useEffect(() => {
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -241,6 +315,43 @@ export function useQuestionSocket(url: string) {
         msg = JSON.parse(event.data);
       } catch {
         return;
+      }
+
+      const payload = msg?.payload ?? msg;
+      const commitMessageCandidate =
+        payload?.most_recent_commit_message ??
+        payload?.commit_message ??
+        payload?.commitMessage;
+      if (typeof commitMessageCandidate === "string") {
+        latestCommitMessageRef.current = commitMessageCandidate;
+      }
+
+      const affectedFunctionsCandidate =
+        payload?.affected_functions ??
+        payload?.affectedFunctions ??
+        payload?.conflict_functions;
+      const normalizedAffectedFunctions = normalizeFunctionContexts(affectedFunctionsCandidate);
+      if (normalizedAffectedFunctions.length > 0) {
+        latestAffectedFunctionsRef.current = normalizedAffectedFunctions;
+      }
+
+      const ancestorFunctionsCandidate =
+        payload?.ancestor_functions ??
+        payload?.ancestorFunctions ??
+        payload?.ancestor_functions_other_files;
+      const normalizedAncestorFunctions = normalizeFunctionContexts(ancestorFunctionsCandidate);
+      if (normalizedAncestorFunctions.length > 0) {
+        latestAncestorFunctionsRef.current = normalizedAncestorFunctions;
+      }
+
+      const changedFilesCandidate =
+        payload?.fileContent ??
+        payload?.file_content ??
+        payload?.changed_files ??
+        payload?.changed_files_content;
+      const normalizedChangedFiles = normalizeChangedFiles(changedFilesCandidate);
+      if (normalizedChangedFiles.length > 0) {
+        latestChangedFilesRef.current = normalizedChangedFiles;
       }
 
       if (msg?.type === "start") {
@@ -292,6 +403,21 @@ export function useQuestionSocket(url: string) {
         payload: choice,
       })
     );
+
+    const userSelection = [choice.summary, choice.details].filter((part) => typeof part === "string" && part.length > 0).join("\n\n");
+    const generateTestsPayload = {
+      commit_message: latestCommitMessageRef.current,
+      fileContent: latestChangedFilesRef.current,
+      affected_functions: latestAffectedFunctionsRef.current,
+      ancestor_functions: latestAncestorFunctionsRef.current,
+      intent: userSelection,
+    };
+
+    const generateTestsSocket = new WebSocket(getGenerateTestsUrl(url));
+    generateTestsSocket.onopen = () => {
+      generateTestsSocket.send(JSON.stringify(generateTestsPayload));
+      generateTestsSocket.close();
+    };
   }, []);
 
   return { question, status, sendChoice };
