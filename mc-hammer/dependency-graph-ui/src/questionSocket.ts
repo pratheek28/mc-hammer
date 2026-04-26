@@ -21,6 +21,7 @@ type Solution = {
 
 type InitialMessage = {
   remote: string;
+  local: string;
   curr: string;
   graph: Record<string, unknown>;
 };
@@ -41,7 +42,8 @@ async function fetchRemoteAndCurr(): Promise<{ remote: string; curr: string } | 
       }
 
       const remote = typeof payload?.remote === "string" ? payload.remote : "";
-      const curr = typeof payload?.curr === "string" ? payload.curr : "";
+      const local = typeof payload?.local === "string" ? payload.local : "";
+      const curr = typeof payload?.curr === "string" ? payload.curr : local;
       if (remote || curr) {
         return { remote, curr };
       }
@@ -126,6 +128,7 @@ async function buildInitialMessage(): Promise<InitialMessage> {
 
   return {
     remote: fileContext?.remote ?? "",
+    local: fileContext?.curr ?? "",
     curr: fileContext?.curr ?? "",
     graph: graph ?? {},
   };
@@ -232,6 +235,7 @@ export function useQuestionSocket(url: string) {
 
     ws.onmessage = (event) => {
       console.log("Received message from question socket");
+      console.log("[questionSocket] raw websocket payload:", event.data);
       let msg: any;
       try {
         msg = JSON.parse(event.data);

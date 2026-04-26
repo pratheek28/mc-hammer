@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import App from "./App";
 import Question, { type ResolutionOption } from "./Question";
 import { useQuestionSocket } from "./questionSocket";
@@ -36,9 +36,12 @@ export default function Root() {
 }
 
 function GateQuestion({ onConfirmYes }: { onConfirmYes: () => void }) {
-  const { question, sendChoice } = useQuestionSocket("ws://10.30.197.121:8000/generate-intent");
+  const { question, status, sendChoice } = useQuestionSocket("ws://10.30.197.121:8050/generate-intent");
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [expandedOptionId, setExpandedOptionId] = useState<string | null>(null);
+  const isWaitingOnSocket = !question && (
+    status === "connecting" || status === "connected" || status === "receiving"
+  );
 
   const options = useMemo<ResolutionOption[]>(() => {
     if (!question) {
@@ -81,9 +84,10 @@ function GateQuestion({ onConfirmYes }: { onConfirmYes: () => void }) {
 
   return (
     <div className="graph-app" style={{ width: "100vw", height: "100vh" }}>
+      {isWaitingOnSocket && <GraphLoadingVisualizer />}
       <Question
-        isVisible
-        question="Do you want to open the dependency graph?"
+        isVisible={!isWaitingOnSocket}
+        question="How would you like to merge this code?"
         options={options}
         selectedOptionId={selectedOptionId}
         expandedOptionId={expandedOptionId}
@@ -93,6 +97,72 @@ function GateQuestion({ onConfirmYes }: { onConfirmYes: () => void }) {
         }
         onConfirm={handleConfirm}
       />
+    </div>
+  );
+}
+
+type LoadingNode = {
+  id: number;
+  x: number;
+  y: number;
+};
+
+function GraphLoadingVisualizer() {
+  const [tick, setTick] = useState(0);
+  const nodes = useMemo<LoadingNode[]>(() => {
+    const nodeCount = Math.min(14, Math.max(2, Math.floor(tick / 4) + 2));
+    const centerX = 50;
+    const centerY = 50;
+    const radius = 35;
+    return Array.from({ length: nodeCount }, (_, index) => {
+      const angle = ((Math.PI * 2) / nodeCount) * index + tick * 0.015;
+      const wobble = Math.sin((tick + index * 7) * 0.14) * 4;
+      return {
+        id: index,
+        x: centerX + Math.cos(angle) * (radius + wobble),
+        y: centerY + Math.sin(angle) * (radius + wobble),
+      };
+    });
+  }, [tick]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setTick((prev) => prev + 1);
+    }, 140);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  return (
+    <div className="graph-loader-overlay" role="status" aria-live="polite">
+      <div className="graph-loader-shell">
+        <div className="graph-loader-title">Building live graph context...</div>
+        <svg viewBox="0 0 100 100" className="graph-loader-canvas" aria-hidden="true">
+          {nodes.map((fromNode, index) => {
+            const toNode = nodes[(index + 1) % nodes.length];
+            return (
+              <line
+                key={`edge-${fromNode.id}-${toNode.id}`}
+                x1={fromNode.x}
+                y1={fromNode.y}
+                x2={toNode.x}
+                y2={toNode.y}
+                className="graph-loader-edge"
+              />
+            );
+          })}
+          {nodes.map((node, index) => (
+            <circle
+              key={`node-${node.id}`}
+              cx={node.x}
+              cy={node.y}
+              r={index === 0 ? 3.4 : 2.8}
+              className={`graph-loader-node graph-loader-node-${index % 3}`}
+            />
+          ))}
+        </svg>
+      </div>
     </div>
   );
 }
