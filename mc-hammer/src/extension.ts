@@ -22,6 +22,7 @@ import { ConflictPetViewProvider } from './conflictPetView';
 
 let conflictStatusBar: vscode.StatusBarItem | null = null;
 let conflictPetViewProvider: ConflictPetViewProvider | null = null;
+let latestTargetFunctionFile: string | null = null;
 
 const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 
@@ -67,6 +68,7 @@ async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar
         getCurrentFileContent(workspacePath, targetFunctionFile),
         getLatestMainCommitMessage(workspacePath)
     ]);
+    latestTargetFunctionFile = targetFunctionFile;
 
     if (!remote || !curr || !commit) {
         vscode.window.showErrorMessage('MC Hammer: Could not retrieve all required data. Aborting send.');
@@ -131,7 +133,40 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
 
     uiCommandServer = http.createServer((req, res) => {
         const requestUrl = req.url ? new URL(req.url, `http://127.0.0.1:${UI_COMMAND_PORT}`) : null;
-        if (!requestUrl || req.method !== 'GET' || requestUrl.pathname !== '/open-function') {
+        if (!requestUrl || req.method !== 'GET') {
+            res.statusCode = 404;
+            res.end('Not found');
+            return;
+        }
+
+        if (requestUrl.pathname === '/question-context') {
+            const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!workspacePath || !latestTargetFunctionFile) {
+                res.statusCode = 404;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: 'No target file context available yet.' }));
+                return;
+            }
+
+            Promise.all([
+                getRemoteFileContent(workspacePath, latestTargetFunctionFile),
+                getCurrentFileContent(workspacePath, latestTargetFunctionFile),
+            ])
+                .then(([remote, curr]) => {
+                    res.statusCode = 200;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ remote, curr }));
+                })
+                .catch((error) => {
+                    const message = error instanceof Error ? error.message : String(error);
+                    res.statusCode = 500;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: message }));
+                });
+            return;
+        }
+
+        if (requestUrl.pathname !== '/open-function') {
             res.statusCode = 404;
             res.end('Not found');
             return;

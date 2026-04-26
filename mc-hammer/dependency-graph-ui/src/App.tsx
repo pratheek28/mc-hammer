@@ -1,4 +1,4 @@
-import ReactFlow, { MiniMap, Controls, Background } from "reactflow";
+import ReactFlow, { MiniMap, Controls, Background, MarkerType } from "reactflow";
 import "reactflow/dist/style.css";
 import "./App.css";
 import { useGraphSocket } from './useGraphSocket';
@@ -13,6 +13,8 @@ export default function App() {
         style: {
           ...(node.style ?? {}),
           width: 190,
+          borderRadius: 16,
+          fontWeight: 700,
           textAlign: "center" as const,
           display: "flex",
           alignItems: "center",
@@ -20,6 +22,28 @@ export default function App() {
         },
       })),
     [nodes]
+  );
+  const styledEdges = useMemo(
+    () =>
+      edges.map((edge) => {
+        const markerEndBase = typeof edge.markerEnd === "object" && edge.markerEnd !== null ? edge.markerEnd : {};
+        return {
+          ...edge,
+          style: {
+            ...(edge.style ?? {}),
+            strokeWidth: 2.8,
+            stroke: "#4b5563",
+          },
+          markerEnd: {
+            ...markerEndBase,
+            type: MarkerType.ArrowClosed,
+            width: 24,
+            height: 24,
+            color: "#4b5563",
+          },
+        };
+      }),
+    [edges]
   );
 
   const handleNodeClick = useCallback((_: unknown, node: { id: string; data?: { label?: unknown } }) => {
@@ -40,7 +64,7 @@ export default function App() {
         <span>Nodes: {nodes.length}</span>
         <span>Edges: {edges.length}</span>
       </div>
-      <ReactFlow nodes={styledNodes} edges={edges} fitView onNodeClick={handleNodeClick}>
+      <ReactFlow nodes={styledNodes} edges={styledEdges} fitView onNodeClick={handleNodeClick}>
         <MiniMap />
         <Controls />
         <Background />

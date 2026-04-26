@@ -20,6 +20,7 @@ LATEST_COMMIT_MESSAGE = ""
 LATEST_REMOTE_CONTENT = ""
 LATEST_CURRENT_CONTENT = ""
 LATEST_GENERATED_TESTCASES = None
+LATEST_GRAPH_DATA = None
 
 
 def _parse_conflicted_functions(value) -> dict[str, list[str]]:
@@ -454,7 +455,7 @@ def to_react_flow(G: nx.DiGraph) -> dict:
 
 
 async def handler(websocket):
-    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_GENERATED_TESTCASES
+    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_GENERATED_TESTCASES, LATEST_GRAPH_DATA
     payload_raw = await websocket.recv()
     direct_only = True
     pwd = ""
@@ -536,6 +537,7 @@ async def handler(websocket):
 
         T = await asyncio.to_thread(get_subgraph, G, target, direct_only)
         graph_data = await asyncio.to_thread(to_react_flow, T)
+        LATEST_GRAPH_DATA = graph_data
         # ancestors = nx.ancestors(G, node)
         # send_generate_tests_request(target, ancestors)
         # send_generate_merge_request(target, ancestors)
@@ -586,9 +588,22 @@ async def react_flow_server(websocket):
     except Exception:
         pass
 
+async def question_graph_server(websocket):
+    if LATEST_GRAPH_DATA is None:
+        await websocket.send(json.dumps({"type": "error", "message": "No graph data is available yet"}))
+        return
+
+    await websocket.send(json.dumps({"type": "graph", "graph": LATEST_GRAPH_DATA}))
+
+    try:
+        await websocket.wait_closed()
+    except Exception:
+        pass
+
 async def main():
     async with websockets.serve(handler, "127.0.0.1", 8765), \
-               websockets.serve(react_flow_server, "127.0.0.1", 8000):
+               websockets.serve(react_flow_server, "127.0.0.1", 8000), \
+               websockets.serve(question_graph_server, "127.0.0.1", 8001):
         await asyncio.Future()
 
 if __name__ == "__main__":
