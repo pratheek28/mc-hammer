@@ -609,6 +609,7 @@ async def question_context_server(websocket):
                 "type": "question-context",
                 "ok": True,
                 "remote": LATEST_REMOTE_CONTENT,
+                "local": LATEST_CURRENT_CONTENT,
                 "curr": LATEST_CURRENT_CONTENT,
             }
         )
