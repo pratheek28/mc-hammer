@@ -34,7 +34,7 @@ const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar: vscode.StatusBarItem | null, conflictPetViewProvider: ConflictPetViewProvider | null) {
     const terminal = getTerminal();
     terminal.show();
-    terminal.sendText('git diff --name-only --diff-filter=U');
+    terminal.sendText('Write-Host "git diff --name-only --diff-filter=U" -ForegroundColor Red; git diff --name-only --diff-filter=U');
 
     const conflictedFunctions = await getConflictedFunctions();
 
@@ -375,8 +375,10 @@ async function getConflictedFunctions(): Promise<Record<string, string[]>> {
 
 function getTerminal(): vscode.Terminal {
     if (!hammerTerminal || hammerTerminal.exitStatus !== undefined) {
-        hammerTerminal = vscode.window.createTerminal('MC Hammer');
-    }
+        hammerTerminal = vscode.window.createTerminal({
+            name: 'MC Hammer',
+            color: new vscode.ThemeColor('terminal.ansiRed')
+        });    }
     return hammerTerminal;
 }
 
@@ -639,7 +641,7 @@ function getStartupGifHtml(webview: vscode.Webview, gifUri: vscode.Uri): string 
 </html>`;
 }
 
-function startReactAndPreview(context: vscode.ExtensionContext, conflictPetViewProvider: ConflictPetViewProvider | null): void {
+function startReactAndPreview(context: vscode.ExtensionContext, _conflictPetViewProvider?: ConflictPetViewProvider | null): void {
     if (reactStartupPanel) {
         reactStartupPanel.dispose();
         reactStartupPanel = undefined;
