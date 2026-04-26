@@ -2,10 +2,21 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
 import { promises as fs } from 'fs';
-import { send } from 'process';
+import * as http from 'http';
 
 let hammerTerminal: vscode.Terminal | undefined;
 let reactTerminal: vscode.Terminal | undefined;
+let uiCommandServer: http.Server | undefined;
+
+const UI_COMMAND_PORT = 8766;
+const DEFAULT_PYTHON_EXCLUDE_GLOB = '**/{.git,node_modules,.venv,venv,__pycache__,dist,build}/**';
+
+interface FunctionLocation {
+    filePath: string;
+    line: number;
+}
+
+const functionLocationByLabel: Record<string, FunctionLocation> = {};
 
 const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 
@@ -52,6 +63,101 @@ async function buttonClicked(context: vscode.ExtensionContext) {
         vscode.window.showErrorMessage('MC Hammer: Could not retrieve working directory. Aborting...');
         return;
     }
+}
+
+async function openFunctionLocation(location: FunctionLocation): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(location.filePath);
+    const editor = await vscode.window.showTextDocument(document, { preview: false });
+    const targetPosition = new vscode.Position(Math.max(0, location.line - 1), 0);
+    editor.selection = new vscode.Selection(targetPosition, targetPosition);
+    editor.revealRange(new vscode.Range(targetPosition, targetPosition), vscode.TextEditorRevealType.InCenter);
+}
+
+async function buildFunctionLocationDictionary(): Promise<void> {
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspacePath) {
+        return;
+    }
+
+    for (const key of Object.keys(functionLocationByLabel)) {
+        delete functionLocationByLabel[key];
+    }
+
+    const pythonFiles = await vscode.workspace.findFiles('**/*.py', DEFAULT_PYTHON_EXCLUDE_GLOB);
+    const functionPattern = /^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/;
+
+    for (const fileUri of pythonFiles) {
+        const document = await vscode.workspace.openTextDocument(fileUri);
+        const lines = document.getText().split('\n');
+
+        for (let i = 0; i < lines.length; i++) {
+            const match = lines[i].match(functionPattern);
+            if (!match) {
+                continue;
+            }
+
+            const functionLabel = match[1];
+            if (!functionLocationByLabel[functionLabel]) {
+                functionLocationByLabel[functionLabel] = {
+                    filePath: fileUri.fsPath,
+                    line: i + 1
+                };
+            }
+        }
+    }
+}
+
+function startUiCommandServer(context: vscode.ExtensionContext): void {
+    if (uiCommandServer) {
+        return;
+    }
+
+    uiCommandServer = http.createServer((req, res) => {
+        const requestUrl = req.url ? new URL(req.url, `http://127.0.0.1:${UI_COMMAND_PORT}`) : null;
+        if (!requestUrl || req.method !== 'GET' || requestUrl.pathname !== '/open-function') {
+            res.statusCode = 404;
+            res.end('Not found');
+            return;
+        }
+
+        const rawLabel = requestUrl.searchParams.get('label');
+        const label = rawLabel?.trim();
+
+        if (!label) {
+            res.statusCode = 400;
+            res.end('Missing label');
+            return;
+        }
+
+        const location = functionLocationByLabel[label];
+        if (!location) {
+            res.statusCode = 404;
+            res.end('Function label not found');
+            return;
+        }
+
+        openFunctionLocation(location).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`MC Hammer: Unable to open function "${label}": ${message}`);
+        });
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: true }));
+    });
+
+    uiCommandServer.listen(UI_COMMAND_PORT, '127.0.0.1', () => {
+        console.log(`[MC Hammer] UI command server listening on ${UI_COMMAND_PORT}`);
+    });
+
+    context.subscriptions.push({
+        dispose: () => {
+            if (uiCommandServer) {
+                uiCommandServer.close();
+                uiCommandServer = undefined;
+            }
+        }
+    });
 }
 
 function execInWorkspace(command: string, cwd: string): Promise<string> {
@@ -418,6 +524,7 @@ export async function runApprovedCommand(context: vscode.ExtensionContext, pwd: 
     );
 
     if (result === 'Run it') {
+        await buildFunctionLocationDictionary();
 
         sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit);
         startReactAndPreview(context);
@@ -501,6 +608,7 @@ export function activate(context: vscode.ExtensionContext) {
         await testCases(latestGeneratedTestCases);
     });
     context.subscriptions.push(testRunnerBuilderCommand);
+    startUiCommandServer(context);
 
 	//listen for messages from the backend 
 	socket.addEventListener('message', (event) => {
