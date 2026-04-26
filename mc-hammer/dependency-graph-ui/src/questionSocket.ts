@@ -23,6 +23,7 @@ type InitialMessage = {
   remote: string;
   local: string;
   curr: string;
+  file: string;
   graph: Record<string, unknown>;
 };
 
@@ -32,20 +33,22 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-async function fetchRemoteAndCurr(): Promise<{ remote: string; curr: string } | null> {
+async function fetchRemoteAndCurr(): Promise<{ remote: string; curr: string; file: string } | null> {
   for (let attempt = 0; attempt < INITIAL_FETCH_RETRY_LIMIT; attempt += 1) {
     try {
       const payload = await fetchQuestionContextFromBackend();
+      const contextPayload = payload as Record<string, unknown>;
       if (!payload?.ok) {
         await delay(INITIAL_FETCH_RETRY_DELAY_MS);
         continue;
       }
 
-      const remote = typeof payload?.remote === "string" ? payload.remote : "";
-      const local = typeof payload?.local === "string" ? payload.local : "";
-      const curr = typeof payload?.curr === "string" ? payload.curr : local;
-      if (remote || curr) {
-        return { remote, curr };
+      const remote = typeof contextPayload.remote === "string" ? contextPayload.remote : "";
+      const local = typeof contextPayload.local === "string" ? contextPayload.local : "";
+      const curr = typeof contextPayload.curr === "string" ? contextPayload.curr : local;
+      const file = typeof contextPayload.file === "string" ? contextPayload.file : "";
+      if (remote || curr || file) {
+        return { remote, curr, file };
       }
     } catch {
       // Retry below.
@@ -130,6 +133,7 @@ async function buildInitialMessage(): Promise<InitialMessage> {
     remote: fileContext?.remote ?? "",
     local: fileContext?.curr ?? "",
     curr: fileContext?.curr ?? "",
+    file: fileContext?.file ?? "",
     graph: graph ?? {},
   };
 }
@@ -230,6 +234,27 @@ function getGenerateTestsUrl(baseUrl: string): string {
   }
 }
 
+function sendGeneratedTestsToExtension(rawPayload: unknown): void {
+  const uiCommandSocket = new WebSocket("ws://127.0.0.1:8766/ui-commands");
+  uiCommandSocket.onopen = () => {
+    uiCommandSocket.send(
+      JSON.stringify({
+        type: "run-testcases",
+        payload: rawPayload,
+      })
+    );
+  };
+  uiCommandSocket.onmessage = () => {
+    uiCommandSocket.close();
+  };
+  uiCommandSocket.onerror = (error) => {
+    console.error("[questionSocket] Failed to forward testcases to extension:", error);
+  };
+  uiCommandSocket.onclose = () => {
+    // no-op
+  };
+}
+
 export function useQuestionSocket(url: string) {
   const [question, setQuestion] = useState<MCQPayload | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
@@ -321,7 +346,37 @@ export function useQuestionSocket(url: string) {
         const generateTestsSocket = new WebSocket(getGenerateTestsUrl(url));
         generateTestsSocket.onopen = () => {
           generateTestsSocket.send(JSON.stringify(generateTestsPayload));
-          generateTestsSocket.close();
+        };
+        generateTestsSocket.onmessage = (event) => {
+          console.log("[questionSocket] Received generate-tests payload:", event.data);
+          let parsedMessage: any = event.data;
+          if (typeof event.data === "string") {
+            try {
+              parsedMessage = JSON.parse(event.data);
+            } catch {
+              // Keep original string payload for extension-side parsing fallback.
+            }
+          }
+
+          const messageType = typeof parsedMessage?.type === "string" ? parsedMessage.type : "";
+          if (messageType === "error") {
+            console.error("[questionSocket] generate-tests backend returned error:", parsedMessage);
+            generateTestsSocket.close();
+            return;
+          }
+
+          if (messageType === "done") {
+            generateTestsSocket.close();
+            return;
+          }
+
+          sendGeneratedTestsToExtension(parsedMessage?.payload ?? parsedMessage);
+        };
+        generateTestsSocket.onerror = (error) => {
+          console.error("[questionSocket] generate-tests websocket error:", error);
+        };
+        generateTestsSocket.onclose = () => {
+          console.log("[questionSocket] generate-tests socket closed");
         };
       })
       .catch((error) => {

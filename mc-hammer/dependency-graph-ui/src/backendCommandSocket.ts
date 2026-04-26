@@ -53,7 +53,7 @@ function requestBackend<TResponse>(
   });
 }
 
-export function fetchQuestionContextFromBackend(): Promise<{ ok?: boolean; remote?: unknown; local?: unknown; curr?: unknown }> {
+export function fetchQuestionContextFromBackend(): Promise<{ ok?: boolean; remote?: unknown; local?: unknown; curr?: unknown; file?: unknown }> {
   return requestBackend("ws://127.0.0.1:8002");
 }
 
