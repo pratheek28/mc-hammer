@@ -52,7 +52,7 @@ export default function App() {
       : node.id;
     const encodedLabel = encodeURIComponent(label);
 
-    fetch(`http://127.0.0.1:8766/open-function?label=${encodedLabel}`).catch((error) => {
+    fetch(`ws://127.0.0.1:8766/open-function?label=${encodedLabel}`).catch((error) => {
       console.error("Failed to request function open:", error);
     });
   }, []);

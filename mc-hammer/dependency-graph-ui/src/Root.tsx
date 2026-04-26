@@ -36,7 +36,7 @@ export default function Root() {
 }
 
 function GateQuestion({ onConfirmYes }: { onConfirmYes: () => void }) {
-  const { question, sendChoice } = useQuestionSocket("ws://10.30.197.121:8000");
+  const { question, sendChoice } = useQuestionSocket("ws://10.30.197.121:8000/generate-intent");
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [expandedOptionId, setExpandedOptionId] = useState<string | null>(null);
 
