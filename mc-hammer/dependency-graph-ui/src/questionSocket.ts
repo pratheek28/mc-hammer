@@ -250,6 +250,7 @@ function getGenerateMergeUrl(baseUrl: string): string {
 }
 
 function sendGeneratedTestsToExtension(rawPayload: unknown): void {
+  window.dispatchEvent(new CustomEvent("mc-hammer:testcases-received"));
   const uiCommandSocket = new WebSocket("ws://127.0.0.1:8766/ui-commands");
   uiCommandSocket.onopen = () => {
     uiCommandSocket.send(
@@ -373,6 +374,7 @@ function openGenerateMergeSocket(baseUrl: string): void {
     const mergedFileCode = extractMergedFileContent(parsedMessage);
     if (mergedFileCode) {
       mergeResolved = true;
+      console.log("[questionSocket] Final merged file received from /generate-merge:", mergedFileCode);
       window.alert("Merge conflict has been resolved.");
       const shouldApply = window.confirm(
         "Apply the generated merge resolution? This will replace the target function with the fixed code."

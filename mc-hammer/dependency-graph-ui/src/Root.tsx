@@ -211,7 +211,7 @@ function GraphLoadingVisualizer() {
             ))}
           </g>
           <text x={0} y={107} textAnchor="middle" className="graph-loader-caption">
-            Expanding dependency map... ({nodes.length} nodes)
+            Mapping Dependencies...
           </text>
         </svg>
       </div>
