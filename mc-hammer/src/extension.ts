@@ -10,7 +10,6 @@ let hammerTerminal: vscode.Terminal | undefined;
 let reactTerminal: vscode.Terminal | undefined;
 let uiCommandServer: http.Server | undefined;
 let uiCommandSocketServer: WebSocketServer | undefined;
-let reactStartupPanel: vscode.WebviewPanel | undefined;
 
 
 const UI_COMMAND_PORT = 8766;
@@ -34,7 +33,7 @@ const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar: vscode.StatusBarItem | null, conflictPetViewProvider: ConflictPetViewProvider | null) {
     const terminal = getTerminal();
     terminal.show();
-    terminal.sendText('git diff --name-only --diff-filter=U');
+    terminal.sendText('Write-Host "git diff --name-only --diff-filter=U" -ForegroundColor Red; git diff --name-only --diff-filter=U');
 
     const conflictedFunctions = await getConflictedFunctions();
 
@@ -68,16 +67,6 @@ async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar
         return;
     }
 
-    const conflictedFilePath = path.join(workspacePath, targetFunctionFile);
-    let conflictedFileContent = "";
-    try {
-        const conflictedDocument = await vscode.workspace.openTextDocument(conflictedFilePath);
-        conflictedFileContent = conflictedDocument.getText();
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showWarningMessage(`MC Hammer: Unable to read conflicted file contents (${message}). Continuing without file context.`);
-    }
-
     const [remote, curr, commit] = await Promise.all([
         getLatestRemoteCommitMessage(workspacePath),
         getLatestLocalCommitMessage(workspacePath),
@@ -85,24 +74,14 @@ async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar
     ]);
     latestTargetFunctionFile = targetFunctionFile;
 
-    const remoteCommitMessage = remote.trim() ? remote : curr;
-    if (!curr || !commit) {
+    if (!remote || !curr || !commit) {
         vscode.window.showErrorMessage('MC Hammer: Could not retrieve all required data. Aborting send.');
         return;
     }
     const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
     if (dir) {
-        runApprovedCommand(
-            context,
-            dir,
-            JSON.stringify(conflictedFunctions),
-            targetFunction[0],
-            curr,
-            remoteCommitMessage,
-            commit,
-            conflictedFileContent
-        );
+        runApprovedCommand(context, dir, JSON.stringify(conflictedFunctions), targetFunction[0], curr, remote, commit); 
     }else {
         vscode.window.showErrorMessage('MC Hammer: Could not retrieve working directory. Aborting...');
         return;
@@ -235,17 +214,7 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
                         getLatestRemoteCommitMessage(workspacePath),
                         getLatestLocalCommitMessage(workspacePath),
                     ]);
-                    let file = '';
-                    if (latestTargetFunctionFile) {
-                        const latestTargetFunctionPath = path.join(workspacePath, latestTargetFunctionFile);
-                        try {
-                            const fileDocument = await vscode.workspace.openTextDocument(latestTargetFunctionPath);
-                            file = fileDocument.getText();
-                        } catch {
-                            file = '';
-                        }
-                    }
-                    client.send(JSON.stringify({ ok: true, type: 'question-context', remote, curr, file }));
+                    client.send(JSON.stringify({ ok: true, type: 'question-context', remote, curr }));
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     client.send(JSON.stringify({ ok: false, type: 'question-context', error: message }));
@@ -273,32 +242,6 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
                     const message = error instanceof Error ? error.message : String(error);
                     client.send(JSON.stringify({ ok: false, type: 'open-function', error: message }));
                     vscode.window.showErrorMessage(`MC Hammer: Unable to open function "${label}": ${message}`);
-                }
-                return;
-            }
-
-            if (type === 'run-testcases') {
-                const rawPayload = command?.payload;
-                const parsedPayload = parseJsonIfPossible(rawPayload);
-                const testCasePayload = parseTestCasesPayload(parsedPayload);
-                if (!testCasePayload) {
-                    client.send(JSON.stringify({
-                        ok: false,
-                        type: 'run-testcases',
-                        error: 'Invalid testcase payload.'
-                    }));
-                    return;
-                }
-
-                latestGeneratedTestCases = testCasePayload;
-
-                try {
-                    await testCases(testCasePayload);
-                    client.send(JSON.stringify({ ok: true, type: 'run-testcases' }));
-                } catch (error) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    client.send(JSON.stringify({ ok: false, type: 'run-testcases', error: message }));
-                    vscode.window.showErrorMessage(`MC Hammer testcase runner error: ${message}`);
                 }
                 return;
             }
@@ -342,23 +285,12 @@ function quoteForShell(value: string): string {
 }
 
 async function getLatestRemoteCommitMessage(cwd: string): Promise<string> {
-    const upstreamRef = (await execInWorkspace('git rev-parse --abbrev-ref --symbolic-full-name @{u}', cwd)).trim();
-    if (upstreamRef) {
-        const upstreamOutput = await execInWorkspace(`git log ${upstreamRef} -1 --pretty=%B`, cwd);
-        if (upstreamOutput.trim()) {
-            return upstreamOutput;
-        }
+    const requestedOutput = await execInWorkspace('git log origin/main -1 --pretty=%B', cwd);
+    if (requestedOutput.trim()) {
+        return requestedOutput;
     }
 
-    const fallbackRefs = ['origin/HEAD', 'origin/main', 'origin/master'];
-    for (const ref of fallbackRefs) {
-        const output = await execInWorkspace(`git log ${ref} -1 --pretty=%B`, cwd);
-        if (output.trim()) {
-            return output;
-        }
-    }
-
-    return "";
+    return execInWorkspace('git log origin main -1 --pretty=%B', cwd);
 }
 
 function getLatestLocalCommitMessage(cwd: string): Promise<string> {
@@ -695,28 +627,19 @@ function buildPythonTestRunner(testCases: GeneratedTestCase[]): string {
         return `from ${moduleName} import ${testCase.functionName}`;
     }))].sort();
 
-
     const testFunctions = testCases.map((testCase) => {
         const functionName = toPythonIdentifier(testCase.testName);
         const setupBlock = indentPythonBlock(testCase.setup, 1);
         const callBlock = indentPythonBlock(buildCallSnippet(testCase.call), 1);
-        const expectedReturnLine = `    expected_return_expr = ${JSON.stringify(testCase.expected_return)}`;
-        const expectedSideEffectsLine = `    expected_side_effects_expr = ${JSON.stringify(testCase.expected_side_effects)}`;
-        const checksBlock = [
-            '    checks = []',
-            '    checks.append(_mc_validate_expected_return(expected_return_expr, locals()))',
-            '    checks.append(_mc_validate_side_effects(expected_side_effects_expr, locals()))',
-            '    passed = all(check[\'ok\'] for check in checks)',
-            `    return ${JSON.stringify(testCase.testName)}, passed, checks`
-        ].join('\n');
+        const expectedLine = `    expected = ${testCase.expected_return}`;
+        const returnLine = `    return ${JSON.stringify(testCase.testName)}, result, expected`;
 
         return [
             `def ${functionName}():`,
             setupBlock,
             callBlock,
-            expectedReturnLine,
-            expectedSideEffectsLine,
-            checksBlock
+            expectedLine,
+            returnLine
         ].join('\n');
     });
 
@@ -733,11 +656,11 @@ function buildPythonTestRunner(testCases: GeneratedTestCase[]): string {
         '    ]',
         '',
         '    for function_name, test in tests:',
-        '        test_name, passed, checks = test()',
-        '        if passed:',
+        '        test_name, actual, expected = test()',
+        '        if actual == expected:',
         '            print(f"{function_name},{test_name}, SUCCESS")',
         '        else:',
-        '            print(f"{function_name},{test_name}, FAIL (checks={checks!r})")',
+        '            print(f"{function_name},{test_name}, FAIL (expected={expected!r}, actual={actual!r})")',
         '',
         "if __name__ == '__main__':",
         '    main()'
@@ -745,57 +668,14 @@ function buildPythonTestRunner(testCases: GeneratedTestCase[]): string {
 
     return [
         '# Auto-generated by MC Hammer',
-        'import re',
-        'try:',
-        '    import flask  # Optional import for side-effect predicates.',
-        'except Exception:',
-        '    flask = None',
         ...importLines,
-        '',
-        'def _mc_prepare_expr(expr):',
-        "    if not isinstance(expr, str):",
-        "        return ''",
-        '    prepared = expr.strip()',
-        "    instance_pattern = r'^([a-zA-Z_][a-zA-Z0-9_]*)\\s+is\\s+an?\\s+instance\\s+of\\s+([a-zA-Z_][a-zA-Z0-9_\\.]*)$'",
-        '    match = re.match(instance_pattern, prepared)',
-        '    if match:',
-        "        variable_name, type_name = match.groups()",
-        '        return f"isinstance({variable_name}, {type_name})"',
-        '    return prepared',
-        '',
-        'def _mc_eval_expr(expr, scope):',
-        '    prepared = _mc_prepare_expr(expr)',
-        '    if not prepared:',
-        "        return True, True, ''",
-        '    try:',
-        '        value = eval(prepared, globals(), scope)',
-        "        return True, value, ''",
-        '    except Exception as exc:',
-        "        return False, False, str(exc)",
-        '',
-        'def _mc_validate_expected_return(expr, scope):',
-        "    if not isinstance(expr, str) or not expr.strip():",
-        "        return {'name': 'expected_return', 'ok': True, 'detail': 'empty expected_return; skipped'}",
-        '    parsed, expected_value, error = _mc_eval_expr(expr, scope)',
-        '    if not parsed:',
-        "        return {'name': 'expected_return', 'ok': True, 'detail': f'unparsable expected_return; skipped ({error})'}",
-        "    actual = scope.get('result')",
-        "    return {'name': 'expected_return', 'ok': actual == expected_value, 'detail': {'expected': expected_value, 'actual': actual}}",
-        '',
-        'def _mc_validate_side_effects(expr, scope):',
-        "    if not isinstance(expr, str) or not expr.strip() or expr.strip() == 'True':",
-        "        return {'name': 'expected_side_effects', 'ok': True, 'detail': 'no side-effect predicate or literal True'}",
-        '    parsed, value, error = _mc_eval_expr(expr, scope)',
-        '    if not parsed:',
-        "        return {'name': 'expected_side_effects', 'ok': False, 'detail': f'failed to evaluate side effect expression ({error})'}",
-        "    return {'name': 'expected_side_effects', 'ok': bool(value), 'detail': value}",
         '',
         ...testFunctions.flatMap((fnBody) => [fnBody, '']),
         ...mainLines
     ].join('\n');
 }
 
-function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction: string, curr: string, remote: string, commit: string, file: string) {
+function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction: string, curr: string, remote: string, commit: string) {
     const data = JSON.stringify({
         pwd,
         conflicted_functions: conflictedFunctions,
@@ -803,7 +683,6 @@ function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction:
         curr,
         remote,
         commit,
-        file,
         direct_only: true
     });
 
@@ -814,62 +693,10 @@ function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction:
     }
 }
 
-function getStartupGifHtml(webview: vscode.Webview, gifUri: vscode.Uri): string {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta
-        http-equiv="Content-Security-Policy"
-        content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline';"
-    />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style>
-        body {
-            margin: 0;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: #111;
-        }
-        img {
-            width: min(80vw, 540px);
-            height: auto;
-            object-fit: contain;
-            border-radius: 8px;
-        }
-    </style>
-</head>
-<body>
-    <img src="${gifUri}" alt="MC Hammer warming up..." />
-</body>
-</html>`;
-}
-
-function startReactAndPreview(context: vscode.ExtensionContext, _conflictPetViewProvider?: ConflictPetViewProvider | null): void {
-    if (reactStartupPanel) {
-        reactStartupPanel.dispose();
-        reactStartupPanel = undefined;
+function startReactAndPreview(context: vscode.ExtensionContext, conflictPetViewProvider?: ConflictPetViewProvider | null): void {
+    if (conflictPetViewProvider) {
+        conflictPetViewProvider.setResolvingConflict(true);
     }
-
-    reactStartupPanel = vscode.window.createWebviewPanel(
-        'mcHammerReactStartup',
-        'MC Hammer',
-        vscode.ViewColumn.Beside,
-        {
-            enableScripts: false,
-            localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')]
-        }
-    );
-
-    const fightGifUri = reactStartupPanel.webview.asWebviewUri(
-        vscode.Uri.joinPath(context.extensionUri, 'media', 'fight.gif')
-    );
-    reactStartupPanel.webview.html = getStartupGifHtml(reactStartupPanel.webview, fightGifUri);
-    reactStartupPanel.onDidDispose(() => {
-        reactStartupPanel = undefined;
-    });
 
     if (!reactTerminal || reactTerminal.exitStatus !== undefined) {
         const dependencyGraphUIPath = path.join(context.extensionPath, 'dependency-graph-ui');
@@ -885,21 +712,10 @@ function startReactAndPreview(context: vscode.ExtensionContext, _conflictPetView
             'simpleBrowser.show',
             'http://localhost:5173'
         );
-        reactStartupPanel?.dispose();
-        reactStartupPanel = undefined;
     }, 4000);
 }
 
-export async function runApprovedCommand(
-    context: vscode.ExtensionContext,
-    pwd: string,
-    conflictedFunctions: string,
-    targetFunction: string,
-    curr: string,
-    remote: string,
-    commit: string,
-    file: string
-): Promise<'ran' | 'rejected' | 'dismissed'> {
+export async function runApprovedCommand(context: vscode.ExtensionContext, pwd: string, conflictedFunctions: string, targetFunction: string, curr: string, remote: string, commit: string): Promise<'ran' | 'rejected' | 'dismissed'> {
     const result = await vscode.window.showInformationMessage(
         `MC Hammer wants to work its magic}`,
         { modal: true },
@@ -910,8 +726,8 @@ export async function runApprovedCommand(
     if (result === 'Run it') {
         await buildFunctionLocationDictionary();
 
-        sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit, file);
-        startReactAndPreview(context);
+        sendToBackend(pwd, conflictedFunctions, targetFunction, curr, remote, commit);
+        startReactAndPreview(context, conflictPetViewProvider);
         // const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         // if (dir) {
         //     vscode.env.clipboard.writeText(dir);

@@ -28,20 +28,37 @@ export class ConflictPetViewProvider implements vscode.WebviewViewProvider {
 
     public setConflictState(hasConflict: boolean): void {
         this._hasConflict = hasConflict;
+        if (!hasConflict) {
+            this._isResolvingConflict = false;
+        }
 
         if (!this._view) {
             return;
         }
 
-        this._view.webview.html = this.getHtml(this._view.webview, hasConflict);
+        this._view.webview.html = this.getHtml(this._view.webview, this._hasConflict);
+    }
+
+    public setResolvingConflict(isResolvingConflict: boolean): void {
+        this._isResolvingConflict = isResolvingConflict && this._hasConflict;
+
+        if (!this._view) {
+            return;
+        }
+
+        this._view.webview.html = this.getHtml(this._view.webview, this._hasConflict);
     }
 
     private getHtml(webview: vscode.Webview, hasConflict: boolean): string {
-        const gifPath = hasConflict ? 'ralph.gif' : 'felix.gif';
+        const gifPath = hasConflict
+            ? (this._isResolvingConflict ? 'fight.gif' : 'ralph.gif')
+            : 'felix.gif';
         const gifUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'media', gifPath),
         );
-        const label = hasConflict ? 'Merge conflict detected' : 'No merge conflict';
+        const label = hasConflict
+            ? (this._isResolvingConflict ? 'Resolving merge conflicts' : 'Merge conflict detected')
+            : 'No merge conflict';
 
         const petClass = hasConflict ? 'pet' : 'pet pet-felix';
         return `<!DOCTYPE html>
@@ -83,7 +100,11 @@ export class ConflictPetViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
     <img class="${petClass}" src="${gifUri}" alt="${label}" />
-    <div class="status">${hasConflict ? 'Merge Conflict Detected' : 'No Merge Conflicts'}</div>
+    <div class="status">${
+        hasConflict
+            ? (this._isResolvingConflict ? 'Resolving Merge Conflicts' : 'Merge Conflict Detected')
+            : 'No Merge Conflicts'
+    }</div>
 </body>
 </html>`;
     }
