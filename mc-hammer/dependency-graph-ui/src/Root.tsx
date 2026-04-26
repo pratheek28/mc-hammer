@@ -5,6 +5,7 @@ import { useQuestionSocket } from "./questionSocket";
 
 const SESSION_KEY = "mc-hammer-question-confirmed";
 const YES_OPTION_ID = "yes";
+const AUTO_AI_OPTION_ID = "auto-ai";
 
 function hasConfirmedInSession(): boolean {
   try {
@@ -56,14 +57,26 @@ function GateQuestion({ onConfirmYes }: { onConfirmYes: () => void }) {
           summary: "No, not right now",
           details: "You can close this panel and reopen MC Hammer when you are ready.",
         },
+        {
+          id: AUTO_AI_OPTION_ID,
+          summary: "Let AI do it",
+          details: "Automatically choose the most suitable merge path and continue.",
+        },
       ];
     }
 
-    return question.choices.map((choice, index) => ({
-      id: `option-${index}`,
-      summary: choice.brief,
-      details: choice.overview,
-    }));
+    return [
+      ...question.choices.map((choice, index) => ({
+        id: `option-${index}`,
+        summary: choice.brief,
+        details: choice.overview,
+      })),
+      {
+        id: AUTO_AI_OPTION_ID,
+        summary: "Let AI do it",
+        details: "Automatically choose the most suitable merge path and continue.",
+      },
+    ];
   }, [question]);
 
   const handleConfirm = () => {
@@ -75,11 +88,7 @@ function GateQuestion({ onConfirmYes }: { onConfirmYes: () => void }) {
         details: selectedOption.details,
       });
     }
-    const selectedSummary = selectedOption?.summary.trim().toLowerCase() ?? "";
-    const isYes = selectedOptionId === YES_OPTION_ID || selectedSummary.startsWith("yes");
-    if (isYes) {
-      onConfirmYes();
-    }
+    onConfirmYes();
   };
 
   return (
@@ -105,62 +114,105 @@ type LoadingNode = {
   id: number;
   x: number;
   y: number;
+  depth: number;
 };
 
+type LoadingEdge = {
+  from: number;
+  to: number;
+};
+
+const MAX_LOADING_NODES = 42;
+const NODE_GROWTH_INTERVAL_MS = 900;
+const ZOOM_OUT_NODE_SPAN = 90;
+const MAX_ZOOM_OUT_RATIO = 0.38;
+const BRANCH_BASE_LENGTH = 18;
+const BRANCH_RANDOM_LENGTH = 18;
+const BRANCH_DEPTH_BOOST = 2.8;
+
 function GraphLoadingVisualizer() {
-  const [tick, setTick] = useState(0);
-  const nodes = useMemo<LoadingNode[]>(() => {
-    const nodeCount = Math.min(14, Math.max(2, Math.floor(tick / 4) + 2));
-    const centerX = 50;
-    const centerY = 50;
-    const radius = 35;
-    return Array.from({ length: nodeCount }, (_, index) => {
-      const angle = ((Math.PI * 2) / nodeCount) * index + tick * 0.015;
-      const wobble = Math.sin((tick + index * 7) * 0.14) * 4;
-      return {
-        id: index,
-        x: centerX + Math.cos(angle) * (radius + wobble),
-        y: centerY + Math.sin(angle) * (radius + wobble),
-      };
-    });
-  }, [tick]);
+  const [nodes, setNodes] = useState<LoadingNode[]>([{ id: 0, x: 0, y: 0, depth: 0 }]);
+  const [edges, setEdges] = useState<LoadingEdge[]>([]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      setTick((prev) => prev + 1);
-    }, 140);
+      setNodes((prevNodes) => {
+        if (prevNodes.length >= MAX_LOADING_NODES) {
+          return prevNodes;
+        }
+
+        const parentIndex = Math.floor(Math.random() * prevNodes.length);
+        const parent = prevNodes[parentIndex];
+        const angle = Math.random() * Math.PI * 2;
+        const branchLength = BRANCH_BASE_LENGTH + Math.random() * BRANCH_RANDOM_LENGTH + parent.depth * BRANCH_DEPTH_BOOST;
+        const childDepth = parent.depth + 1;
+        const nextNode: LoadingNode = {
+          id: prevNodes.length,
+          x: parent.x + Math.cos(angle) * branchLength,
+          y: parent.y + Math.sin(angle) * branchLength,
+          depth: childDepth,
+        };
+
+        setEdges((prevEdges) => [
+          ...prevEdges,
+          {
+            from: parent.id,
+            to: nextNode.id,
+          },
+        ]);
+
+        return [...prevNodes, nextNode];
+      });
+    }, NODE_GROWTH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
     };
   }, []);
 
+  const zoomScale = useMemo(() => {
+    const zoomOutProgress = Math.min(1, Math.max(0, (nodes.length - 1) / ZOOM_OUT_NODE_SPAN));
+    return 1 - zoomOutProgress * MAX_ZOOM_OUT_RATIO;
+  }, [nodes.length]);
+
   return (
     <div className="graph-loader-overlay" role="status" aria-live="polite">
       <div className="graph-loader-shell">
-        <div className="graph-loader-title">Building live graph context...</div>
-        <svg viewBox="0 0 100 100" className="graph-loader-canvas" aria-hidden="true">
-          {nodes.map((fromNode, index) => {
-            const toNode = nodes[(index + 1) % nodes.length];
-            return (
-              <line
-                key={`edge-${fromNode.id}-${toNode.id}`}
-                x1={fromNode.x}
-                y1={fromNode.y}
-                x2={toNode.x}
-                y2={toNode.y}
-                className="graph-loader-edge"
+        <div className="graph-loader-title">Populating live grap context...</div>
+        <svg viewBox="-120 -120 240 240" className="graph-loader-canvas" aria-hidden="true">
+          <g
+            className="graph-loader-viewport"
+            style={{ transform: `translate(0px, 0px) scale(${zoomScale})` }}
+          >
+            {edges.map((edge) => {
+              const fromNode = nodes[edge.from];
+              const toNode = nodes[edge.to];
+              if (!fromNode || !toNode) {
+                return null;
+              }
+              return (
+                <line
+                  key={`edge-${edge.from}-${edge.to}`}
+                  x1={fromNode.x}
+                  y1={fromNode.y}
+                  x2={toNode.x}
+                  y2={toNode.y}
+                  className="graph-loader-edge"
+                />
+              );
+            })}
+            {nodes.map((node, index) => (
+              <circle
+                key={`node-${node.id}`}
+                cx={node.x}
+                cy={node.y}
+                r={index === 0 ? 5.3 : 4}
+                className={`graph-loader-node graph-loader-node-${index % 3}`}
               />
-            );
-          })}
-          {nodes.map((node, index) => (
-            <circle
-              key={`node-${node.id}`}
-              cx={node.x}
-              cy={node.y}
-              r={index === 0 ? 3.4 : 2.8}
-              className={`graph-loader-node graph-loader-node-${index % 3}`}
-            />
-          ))}
+            ))}
+          </g>
+          <text x={0} y={107} textAnchor="middle" className="graph-loader-caption">
+            Expanding dependency map... ({nodes.length} nodes)
+          </text>
         </svg>
       </div>
     </div>

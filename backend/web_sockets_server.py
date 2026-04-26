@@ -22,6 +22,7 @@ LATEST_REMOTE_CONTENT = ""
 LATEST_CURRENT_CONTENT = ""
 LATEST_GENERATED_TESTCASES = None
 LATEST_GRAPH_DATA = None
+LATEST_GENERATE_TESTS_CONTEXT = None
 EXTERNAL_INTENT_WS_URL = os.environ.get("MC_HAMMER_EXTERNAL_INTENT_WS_URL", "ws://10.30.197.121:8000/generate-intent")
 
 
@@ -108,6 +109,108 @@ def format_function_context(function_name: str, file_path: str, function_source:
         "function_content:\n"
         f"{function_source}"
     )
+
+
+def _function_context_obj(function_name: str, file_path: str, function_source: str) -> dict[str, str]:
+    return {
+        "file_name": file_path,
+        "function_name": function_name,
+        "function_content": function_source,
+    }
+
+
+def _collect_changed_file_contents(
+    pwd: str,
+    conflicted_functions_map: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    changed_files: list[dict[str, str]] = []
+    if not pwd:
+        return changed_files
+
+    root = Path(pwd).resolve()
+    for rel_path in conflicted_functions_map.keys():
+        file_path = (root / rel_path).resolve()
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                changed_files.append(
+                    {
+                        "file_name": str(file_path),
+                        "file_content": f.read(),
+                    }
+                )
+        except OSError as e:
+            print(f"[generate-tests-context] Failed to read changed file {file_path}: {e}")
+
+    return changed_files
+
+
+def _build_generate_tests_context(
+    node: str,
+    ancestors: set[str],
+    pwd: str,
+    conflicted_functions_map: dict[str, list[str]],
+) -> dict:
+    node_info = FUNCTION_INDEX.get(node)
+    if node_info is None:
+        return {}
+
+    node_fn, node_file_path = node_info
+    node_source = get_function_source_from_file(node_fn.name, node_file_path, node_fn.lineno) or node_fn.source
+
+    affected_functions = [_function_context_obj(node_fn.name, node_file_path, node_source)]
+    for ancestor in ancestors:
+        ancestor_info = FUNCTION_INDEX.get(ancestor)
+        if ancestor_info is None:
+            continue
+        ancestor_fn, ancestor_file_path = ancestor_info
+        if ancestor_file_path == node_file_path:
+            ancestor_source = (
+                get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
+                or ancestor_fn.source
+            )
+            affected_functions.append(
+                _function_context_obj(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
+
+    ancestor_functions_other_files: list[dict[str, str]] = []
+    for ancestor in ancestors:
+        ancestor_info = FUNCTION_INDEX.get(ancestor)
+        if ancestor_info is None:
+            continue
+        ancestor_fn, ancestor_file_path = ancestor_info
+        if ancestor_file_path != node_file_path:
+            ancestor_source = (
+                get_function_source_from_file(ancestor_fn.name, ancestor_file_path, ancestor_fn.lineno)
+                or ancestor_fn.source
+            )
+            ancestor_functions_other_files.append(
+                _function_context_obj(ancestor_fn.name, ancestor_file_path, ancestor_source)
+            )
+
+    changed_files = _collect_changed_file_contents(pwd, conflicted_functions_map)
+    if not changed_files:
+        try:
+            with open(node_file_path, "r", encoding="utf-8") as f:
+                changed_files = [
+                    {
+                        "file_name": node_file_path,
+                        "file_content": f.read(),
+                    }
+                ]
+        except OSError as e:
+            print(f"[generate-tests-context] Failed fallback file read {node_file_path}: {e}")
+
+    return {
+        "ok": True,
+        "commit_message": LATEST_COMMIT_MESSAGE,
+        "most_recent_commit_message": LATEST_COMMIT_MESSAGE,
+        "file_content": changed_files,
+        "fileContent": changed_files,
+        "affected_functions": affected_functions,
+        "conflict_functions": affected_functions,
+        "ancestor_functions": ancestor_functions_other_files,
+        "ancestor_functions_other_files": ancestor_functions_other_files,
+    }
 
 def send_generate_tests_request(
     node: str,
@@ -457,7 +560,7 @@ def to_react_flow(G: nx.DiGraph) -> dict:
 
 
 async def handler(websocket):
-    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_GENERATED_TESTCASES, LATEST_GRAPH_DATA
+    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_GENERATED_TESTCASES, LATEST_GRAPH_DATA, LATEST_GENERATE_TESTS_CONTEXT
     payload_raw = await websocket.recv()
     direct_only = True
     pwd = ""
@@ -540,6 +643,14 @@ async def handler(websocket):
         T = await asyncio.to_thread(get_subgraph, G, target, direct_only)
         graph_data = await asyncio.to_thread(to_react_flow, T)
         LATEST_GRAPH_DATA = graph_data
+        ancestors = nx.ancestors(G, target)
+        LATEST_GENERATE_TESTS_CONTEXT = await asyncio.to_thread(
+            _build_generate_tests_context,
+            target,
+            ancestors,
+            pwd,
+            conflicted_functions_map,
+        )
         # ancestors = nx.ancestors(G, node)
         # send_generate_tests_request(target, ancestors)
         # send_generate_merge_request(target, ancestors)
@@ -611,6 +722,34 @@ async def question_context_server(websocket):
                 "remote": LATEST_REMOTE_CONTENT,
                 "local": LATEST_CURRENT_CONTENT,
                 "curr": LATEST_CURRENT_CONTENT,
+            }
+        )
+    )
+    try:
+        await websocket.wait_closed()
+    except Exception:
+        pass
+
+
+async def question_generate_tests_context_server(websocket):
+    payload = LATEST_GENERATE_TESTS_CONTEXT
+    if not isinstance(payload, dict) or not payload:
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "generate-tests-context",
+                    "ok": False,
+                    "error": "No generate-tests context is available yet",
+                }
+            )
+        )
+        return
+
+    await websocket.send(
+        json.dumps(
+            {
+                "type": "generate-tests-context",
+                **payload,
             }
         )
     )
@@ -705,6 +844,7 @@ async def main():
                websockets.serve(react_flow_server, "127.0.0.1", 8000), \
                websockets.serve(question_graph_server, "127.0.0.1", 8001), \
                websockets.serve(question_context_server, "127.0.0.1", 8002), \
+               websockets.serve(question_generate_tests_context_server, "127.0.0.1", 8005), \
                websockets.serve(ui_command_server, "127.0.0.1", 8003), \
                websockets.serve(graph_client_relay_server, "127.0.0.1", 8004):
         await asyncio.Future()

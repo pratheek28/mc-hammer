@@ -67,9 +67,9 @@ async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar
     }
 
     const [remote, curr, commit] = await Promise.all([
-        getRemoteFileContent(workspacePath, targetFunctionFile),
-        getCurrentFileContent(workspacePath, targetFunctionFile),
-        getLatestMainCommitMessage(workspacePath)
+        getLatestRemoteCommitMessage(workspacePath),
+        getLatestLocalCommitMessage(workspacePath),
+        getLatestLocalCommitMessage(workspacePath)
     ]);
     latestTargetFunctionFile = targetFunctionFile;
 
@@ -199,19 +199,19 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
 
             if (type === 'question-context') {
                 const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-                if (!workspacePath || !latestTargetFunctionFile) {
+                if (!workspacePath) {
                     client.send(JSON.stringify({
                         ok: false,
                         type: 'question-context',
-                        error: 'No target file context available yet.'
+                        error: 'No workspace context available yet.'
                     }));
                     return;
                 }
 
                 try {
                     const [remote, curr] = await Promise.all([
-                        getRemoteFileContent(workspacePath, latestTargetFunctionFile),
-                        getCurrentFileContent(workspacePath, latestTargetFunctionFile),
+                        getLatestRemoteCommitMessage(workspacePath),
+                        getLatestLocalCommitMessage(workspacePath),
                     ]);
                     client.send(JSON.stringify({ ok: true, type: 'question-context', remote, curr }));
                 } catch (error) {
@@ -283,29 +283,17 @@ function quoteForShell(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-async function getRemoteFileContent(cwd: string, filePath: string): Promise<string> {
-    const quotedPath = quoteForShell(filePath);
-    const requestedCommand = `git show origin main:${quotedPath}`;
-    const requestedOutput = await execInWorkspace(requestedCommand, cwd);
+async function getLatestRemoteCommitMessage(cwd: string): Promise<string> {
+    const requestedOutput = await execInWorkspace('git log origin/main -1 --pretty=%B', cwd);
     if (requestedOutput.trim()) {
         return requestedOutput;
     }
 
-    const canonicalCommand = `git show origin/main:${quotedPath}`;
-    return execInWorkspace(canonicalCommand, cwd);
+    return execInWorkspace('git log origin main -1 --pretty=%B', cwd);
 }
 
-async function getCurrentFileContent(cwd: string, filePath: string): Promise<string> {
-    const absolutePath = path.join(cwd, filePath);
-    try {
-        return await fs.readFile(absolutePath, 'utf8');
-    } catch {
-        return "";
-    }
-}
-
-function getLatestMainCommitMessage(cwd: string): Promise<string> {
-    return execInWorkspace('git log main -1 --pretty=%B', cwd);
+function getLatestLocalCommitMessage(cwd: string): Promise<string> {
+    return execInWorkspace('git log -1 --pretty=%B', cwd);
 }
 
 async function getConflictedFunctions(): Promise<Record<string, string[]>> {
@@ -445,7 +433,11 @@ function parseTestCasesPayload(rawPayload: unknown): GeneratedTestCase[] | null 
             try {
                 payload = JSON.parse(trimmed);
             } catch {
-                return null;
+                const pythonParsed = parsePythonLiteralPayload(trimmed);
+                if (pythonParsed === null) {
+                    return null;
+                }
+                payload = pythonParsed;
             }
         } else {
             return null;
@@ -454,7 +446,9 @@ function parseTestCasesPayload(rawPayload: unknown): GeneratedTestCase[] | null 
 
     if (Array.isArray(payload)) {
         const flattened = flattenTestCaseCandidates(payload);
-        const validCases = flattened.filter(isGeneratedTestCase);
+        const validCases = flattened
+            .map((candidate, index) => normalizeGeneratedTestCase(candidate, index))
+            .filter((candidate): candidate is GeneratedTestCase => candidate !== null);
         return validCases.length > 0 ? validCases : null;
     }
 
@@ -474,8 +468,100 @@ function parseTestCasesPayload(rawPayload: unknown): GeneratedTestCase[] | null 
     }
 
     const flattened = flattenTestCaseCandidates(arrayCandidate);
-    const validCases = flattened.filter(isGeneratedTestCase);
+    const validCases = flattened
+        .map((candidate, index) => normalizeGeneratedTestCase(candidate, index))
+        .filter((candidate): candidate is GeneratedTestCase => candidate !== null);
     return validCases.length > 0 ? validCases : null;
+}
+
+function parsePythonLiteralPayload(rawPayload: string): unknown | null {
+    const script = [
+        'import ast, json, sys',
+        'raw = sys.stdin.read()',
+        'parsed = ast.literal_eval(raw)',
+        'print(json.dumps(parsed))'
+    ].join('\n');
+
+    for (const pythonBinary of ['python3', 'python']) {
+        try {
+            const output = cp.execFileSync(pythonBinary, ['-c', script], {
+                input: rawPayload,
+                encoding: 'utf8',
+                timeout: 2000
+            }).trim();
+            if (!output) {
+                continue;
+            }
+            return JSON.parse(output);
+        } catch {
+            // Try the next Python binary.
+        }
+    }
+
+    return null;
+}
+
+function normalizeGeneratedTestCase(candidate: unknown, index: number): GeneratedTestCase | null {
+    if (isGeneratedTestCase(candidate)) {
+        return candidate;
+    }
+
+    if (!isRecord(candidate)) {
+        return null;
+    }
+
+    const fallbackFilename = latestTargetFunctionFile ?? 'target.py';
+    const fallbackFunctionName = getModuleName(fallbackFilename) || 'target_function';
+    const resolvedFunctionName = (
+        candidate.functionName ??
+        candidate.function_name ??
+        fallbackFunctionName
+    );
+    const functionName = typeof resolvedFunctionName === 'string' && resolvedFunctionName.trim()
+        ? resolvedFunctionName.trim()
+        : fallbackFunctionName;
+
+    const rawArgs = typeof candidate.args === 'string' ? candidate.args.trim() : '';
+    const call = typeof candidate.call === 'string' && candidate.call.trim()
+        ? candidate.call.trim()
+        : (rawArgs ? `${functionName}${rawArgs}` : `${functionName}()`);
+
+    const setupLines: string[] = [];
+    if (typeof candidate.setup === 'string' && candidate.setup.trim()) {
+        setupLines.push(candidate.setup.trim());
+    }
+    if (typeof candidate.response === 'string' && candidate.response.trim()) {
+        setupLines.push(`response = ${candidate.response.trim()}`);
+    }
+
+    const expectedReturn = typeof candidate.expected_return === 'string' && candidate.expected_return.trim()
+        ? candidate.expected_return.trim()
+        : 'None';
+    const expectedSideEffects = typeof candidate.expected_side_effects === 'string' && candidate.expected_side_effects.trim()
+        ? candidate.expected_side_effects.trim()
+        : 'True';
+    const testName = typeof candidate.testName === 'string' && candidate.testName.trim()
+        ? candidate.testName.trim()
+        : (typeof candidate.test_name === 'string' && candidate.test_name.trim()
+            ? candidate.test_name.trim()
+            : `generated_case_${index + 1}`);
+    const description = typeof candidate.description === 'string' && candidate.description.trim()
+        ? candidate.description.trim()
+        : 'Auto-normalized testcase from /generate-tests payload';
+    const filename = typeof candidate.filename === 'string' && candidate.filename.trim()
+        ? candidate.filename.trim()
+        : fallbackFilename;
+
+    return {
+        filename,
+        functionName,
+        testName,
+        setup: setupLines.join('\n'),
+        call,
+        expected_return: expectedReturn,
+        expected_side_effects: expectedSideEffects,
+        description
+    };
 }
 
 function parseJsonIfPossible(rawPayload: unknown): unknown {
@@ -749,6 +835,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const testCasePayload = parseTestCasesPayload(wrappedPayload);
 		if (testCasePayload) {
+            console.log('[MC Hammer] Received testcase payload from backend:', wrappedPayload);
+            console.log('[MC Hammer] Parsed testcase payload:', JSON.stringify(testCasePayload, null, 2));
             latestGeneratedTestCases = testCasePayload;
 			testCases(testCasePayload).catch((error) => {
 				const message = error instanceof Error ? error.message : String(error);

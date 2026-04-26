@@ -52,6 +52,10 @@ export function fetchQuestionContextFromBackend(): Promise<{ ok?: boolean; remot
   return requestBackend("ws://127.0.0.1:8002");
 }
 
+export function fetchGenerateTestsContextFromBackend(): Promise<Record<string, unknown>> {
+  return requestBackend("ws://127.0.0.1:8005");
+}
+
 export function sendBackendUiCommand<TResponse = Record<string, unknown>>(command: Record<string, unknown>): Promise<TResponse> {
   return requestBackend<TResponse>(BACKEND_UI_COMMAND_URL, command);
 }

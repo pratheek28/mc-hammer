@@ -20,9 +20,9 @@ export default function Question({
   question,
   options,
   selectedOptionId,
-  expandedOptionId,
+  expandedOptionId: _expandedOptionId,
   onSelectOption,
-  onToggleMore,
+  onToggleMore: _onToggleMore,
   onConfirm,
 }: QuestionProps) {
   if (!isVisible) {
@@ -36,17 +36,16 @@ export default function Question({
         <div className="resolution-options">
           {options.map((option) => {
             const isSelected = selectedOptionId === option.id;
-            const isExpanded = expandedOptionId === option.id;
             return (
-              <div key={option.id} className={`resolution-option ${isSelected ? "selected" : ""}`}>
-                <button type="button" className="option-select" onClick={() => onSelectOption(option.id)}>
-                  {option.summary}
-                </button>
-                <button type="button" className="option-more" onClick={() => onToggleMore(option.id)}>
-                  More
-                </button>
-                {isExpanded && <div className="option-details">{option.details}</div>}
-              </div>
+              <button
+                key={option.id}
+                type="button"
+                className={`resolution-option ${isSelected ? "selected" : ""}`}
+                onClick={() => onSelectOption(option.id)}
+              >
+                <div className="option-title">{option.summary}</div>
+                <div className="option-description">{option.details}</div>
+              </button>
             );
           })}
         </div>
