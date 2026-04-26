@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import networkx as nx
 import math
+import os
 
 try:
     from dependency_graph_file_getter_helper import get_all_files, extract_functions, get_project_root
@@ -21,6 +22,7 @@ LATEST_REMOTE_CONTENT = ""
 LATEST_CURRENT_CONTENT = ""
 LATEST_GENERATED_TESTCASES = None
 LATEST_GRAPH_DATA = None
+EXTERNAL_INTENT_WS_URL = os.environ.get("MC_HAMMER_EXTERNAL_INTENT_WS_URL", "ws://10.30.197.121:8000/generate-intent")
 
 
 def _parse_conflicted_functions(value) -> dict[str, list[str]]:
@@ -600,10 +602,110 @@ async def question_graph_server(websocket):
     except Exception:
         pass
 
+async def question_context_server(websocket):
+    await websocket.send(
+        json.dumps(
+            {
+                "type": "question-context",
+                "ok": True,
+                "remote": LATEST_REMOTE_CONTENT,
+                "curr": LATEST_CURRENT_CONTENT,
+            }
+        )
+    )
+    try:
+        await websocket.wait_closed()
+    except Exception:
+        pass
+
+async def ui_command_server(websocket):
+    try:
+        payload_raw = await websocket.recv()
+    except Exception:
+        await websocket.send(json.dumps({"type": "error", "ok": False, "error": "Failed to read payload"}))
+        return
+
+    payload = payload_raw
+    if isinstance(payload_raw, str):
+        try:
+            payload = json.loads(payload_raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+
+    if not isinstance(payload, dict):
+        await websocket.send(json.dumps({"type": "error", "ok": False, "error": "Invalid command payload"}))
+        return
+
+    command_type = payload.get("type", "")
+
+    if command_type == "open-function":
+        label = payload.get("label", "")
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "open-function",
+                    "ok": True,
+                    "message": f"Received open-function request for label: {label}",
+                }
+            )
+        )
+        return
+
+    await websocket.send(json.dumps({"type": "error", "ok": False, "error": "Unsupported command type"}))
+
+def _forward_payload_to_external_intent(payload: dict) -> dict:
+    print(f"[relay] Forwarding payload to external intent server: {EXTERNAL_INTENT_WS_URL}")
+    try:
+        with connect(EXTERNAL_INTENT_WS_URL, open_timeout=10, close_timeout=10) as outbound_ws:
+            outbound_ws.send(json.dumps(payload))
+            outbound_response = outbound_ws.recv()
+            try:
+                parsed_outbound = json.loads(outbound_response)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed_outbound = {"raw": outbound_response}
+
+            print("[relay] External intent server responded successfully")
+            return {
+                "ok": True,
+                "upstream": parsed_outbound,
+            }
+    except Exception as exc:
+        print(f"[relay] External intent forward failed: {exc}")
+        return {
+            "ok": False,
+            "error": str(exc),
+        }
+
+async def graph_client_relay_server(websocket):
+    try:
+        raw_payload = await websocket.recv()
+    except Exception as exc:
+        message = f"Failed to receive relay payload: {exc}"
+        print(f"[relay] {message}")
+        await websocket.send(json.dumps({"type": "relay-result", "ok": False, "error": message}))
+        return
+
+    payload = raw_payload
+    if isinstance(raw_payload, str):
+        try:
+            payload = json.loads(raw_payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {"raw_message": raw_payload}
+
+    if not isinstance(payload, dict):
+        payload = {"raw_message": str(raw_payload)}
+
+    print(f"[relay] Received graph client payload: {payload}")
+    relay_result = await asyncio.to_thread(_forward_payload_to_external_intent, payload)
+    await websocket.send(json.dumps({"type": "relay-result", **relay_result}))
+
 async def main():
     async with websockets.serve(handler, "127.0.0.1", 8765), \
                websockets.serve(react_flow_server, "127.0.0.1", 8000), \
-               websockets.serve(question_graph_server, "127.0.0.1", 8001):
+               websockets.serve(question_graph_server, "127.0.0.1", 8001), \
+               websockets.serve(question_context_server, "127.0.0.1", 8002), \
+               websockets.serve(ui_command_server, "127.0.0.1", 8003), \
+               websockets.serve(graph_client_relay_server, "127.0.0.1", 8004):
         await asyncio.Future()
 
 if __name__ == "__main__":
