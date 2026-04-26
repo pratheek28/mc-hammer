@@ -536,18 +536,70 @@ def _fast_grid_positions(nodes: list[str], scale: float = 220.0) -> dict[str, tu
         positions[node] = (col * scale, row * scale)
     return positions
 
+
+def _spread_overlapping_positions(
+    positions: dict[str, tuple[float, float]],
+    min_distance: float = 120.0,
+    max_iterations: int = 12,
+) -> dict[str, tuple[float, float]]:
+    node_ids = list(positions.keys())
+    adjusted = {node_id: [float(x), float(y)] for node_id, (x, y) in positions.items()}
+    if len(node_ids) <= 1:
+        return positions
+
+    for _ in range(max_iterations):
+        moved = False
+        for i in range(len(node_ids)):
+            a_id = node_ids[i]
+            ax, ay = adjusted[a_id]
+            for j in range(i + 1, len(node_ids)):
+                b_id = node_ids[j]
+                bx, by = adjusted[b_id]
+                dx = bx - ax
+                dy = by - ay
+                dist = math.hypot(dx, dy)
+
+                if dist >= min_distance:
+                    continue
+
+                # Deterministic fallback when two nodes have the exact same position.
+                if dist == 0:
+                    angle = ((i * 37 + j * 17) % 360) * (math.pi / 180.0)
+                    dx = math.cos(angle)
+                    dy = math.sin(angle)
+                    dist = 1.0
+
+                push = (min_distance - dist) / 2.0
+                ux = dx / dist
+                uy = dy / dist
+
+                adjusted[a_id][0] -= ux * push
+                adjusted[a_id][1] -= uy * push
+                adjusted[b_id][0] += ux * push
+                adjusted[b_id][1] += uy * push
+                ax, ay = adjusted[a_id]
+                moved = True
+
+        if not moved:
+            break
+
+    return {node_id: (coords[0], coords[1]) for node_id, coords in adjusted.items()}
+
+
 def to_react_flow(G: nx.DiGraph) -> dict:
-    if len(G.nodes()) <= 150:
+    node_ids = list(G.nodes())
+    if len(node_ids) <= 150:
         pos = nx.spring_layout(G, seed=42, scale=400)
     else:
-        pos = _fast_grid_positions(list(G.nodes()))
+        pos = _fast_grid_positions(node_ids)
+    pos = _spread_overlapping_positions(pos)
     nodes = [
         {
             "id": str(node),
             "data": {"label": G.nodes[node].get("label", str(node))},
             "position": {"x": float(pos[node][0]), "y": float(pos[node][1])}
         }
-        for node in G.nodes()
+        for node in node_ids
     ]
     edges = [
         {
@@ -924,7 +976,7 @@ async def graph_client_relay_server(websocket):
         print(f"[relay] Graph relay client disconnected before relay result could be sent: {exc}")
 
 async def main():
-    async with websockets.serve(handler, "127.0.0.1", 8765), \
+    async with websockets.serve(handler, "127.0.0.1", 8765, max_size=10_485_760), \
                websockets.serve(react_flow_server, "127.0.0.1", 8000), \
                websockets.serve(question_graph_server, "127.0.0.1", 8001), \
                websockets.serve(question_context_server, "127.0.0.1", 8002), \

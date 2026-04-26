@@ -234,6 +234,20 @@ function getGenerateTestsUrl(baseUrl: string): string {
   }
 }
 
+function getGenerateMergeUrl(baseUrl: string): string {
+  try {
+    const parsed = new URL(baseUrl);
+    parsed.pathname = "/generate-merge";
+    parsed.search = "";
+    parsed.hash = "";
+    console.log("Derived generate-merge URL:", parsed.toString());
+    return parsed.toString();
+  } catch {
+    console.log("Failed to parse base URL, falling back to default generate-merge URL");
+    return "ws://10.30.197.121:8050/generate-merge";
+  }
+}
+
 function sendGeneratedTestsToExtension(rawPayload: unknown): void {
   const uiCommandSocket = new WebSocket("ws://127.0.0.1:8766/ui-commands");
   uiCommandSocket.onopen = () => {
@@ -252,6 +266,136 @@ function sendGeneratedTestsToExtension(rawPayload: unknown): void {
   };
   uiCommandSocket.onclose = () => {
     // no-op
+  };
+}
+
+function extractMergedFileContent(rawMessage: unknown): string | null {
+  const parseIfJsonString = (value: unknown): unknown => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    const trimmed = value.trim();
+    if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+      return value;
+    }
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  };
+
+  const parsed = parseIfJsonString(rawMessage);
+  if (typeof parsed === "string" && parsed.trim()) {
+    return parsed;
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+
+  const message = parsed as Record<string, unknown>;
+  const payload = parseIfJsonString(message.payload);
+  const candidates: unknown[] = [
+    message.file,
+    message.file_content,
+    message.merged_file,
+    message.mergedFile,
+    message.content,
+    payload,
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).file : null,
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).file_content : null,
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).merged_file : null,
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).mergedFile : null,
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).content : null,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function sendMergedCodeToExtension(mergedFileCode: string): void {
+  const uiCommandSocket = new WebSocket("ws://127.0.0.1:8766/ui-commands");
+  uiCommandSocket.onopen = () => {
+    uiCommandSocket.send(
+      JSON.stringify({
+        type: "apply-merge-resolution",
+        payload: {
+          mergedFileCode,
+          mode: "replace-function",
+        },
+      })
+    );
+  };
+  uiCommandSocket.onmessage = () => {
+    uiCommandSocket.close();
+  };
+  uiCommandSocket.onerror = (error) => {
+    console.error("[questionSocket] Failed to send merged code to extension:", error);
+  };
+  uiCommandSocket.onclose = () => {
+    // no-op
+  };
+}
+
+function openGenerateMergeSocket(baseUrl: string): void {
+  const generateMergeSocket = new WebSocket(getGenerateMergeUrl(baseUrl));
+  let mergeResolved = false;
+
+  generateMergeSocket.onmessage = (event) => {
+    console.log("[questionSocket] Received generate-merge payload:", event.data);
+    let parsedMessage: unknown = event.data;
+    if (typeof event.data === "string") {
+      try {
+        parsedMessage = JSON.parse(event.data);
+      } catch {
+        // Keep original string payload as-is.
+      }
+    }
+
+    const messageRecord =
+      parsedMessage && typeof parsedMessage === "object"
+        ? (parsedMessage as Record<string, unknown>)
+        : null;
+    const messageType = typeof messageRecord?.type === "string" ? messageRecord.type : "";
+    if (messageType === "error") {
+      console.error("[questionSocket] generate-merge backend returned error:", parsedMessage);
+      generateMergeSocket.close();
+      return;
+    }
+
+    const mergedFileCode = extractMergedFileContent(parsedMessage);
+    if (mergedFileCode) {
+      mergeResolved = true;
+      window.alert("Merge conflict has been resolved.");
+      const shouldApply = window.confirm(
+        "Apply the generated merge resolution? This will replace the target function with the fixed code."
+      );
+      if (shouldApply) {
+        sendMergedCodeToExtension(mergedFileCode);
+      }
+      generateMergeSocket.close();
+      return;
+    }
+
+    if (messageType === "done") {
+      generateMergeSocket.close();
+    }
+  };
+
+  generateMergeSocket.onerror = (error) => {
+    console.error("[questionSocket] generate-merge websocket error:", error);
+  };
+
+  generateMergeSocket.onclose = () => {
+    if (!mergeResolved) {
+      console.log("[questionSocket] generate-merge socket closed without merge payload");
+    }
   };
 }
 
@@ -377,6 +521,7 @@ export function useQuestionSocket(url: string) {
         };
         generateTestsSocket.onclose = () => {
           console.log("[questionSocket] generate-tests socket closed");
+          openGenerateMergeSocket(url);
         };
       })
       .catch((error) => {

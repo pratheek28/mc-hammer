@@ -1,7 +1,7 @@
 const BACKEND_UI_COMMAND_URL = "ws://127.0.0.1:8766/ui-commands";
 const BACKEND_GRAPH_RELAY_URL = "ws://127.0.0.1:8004";
 const REQUEST_TIMEOUT_MS = 1500;
-const GRAPH_RELAY_TIMEOUT_MS = 8000;
+const GRAPH_RELAY_TIMEOUT_MS = 10 * 60 * 1000;
 
 function requestBackend<TResponse>(
   url: string,
