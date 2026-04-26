@@ -33,7 +33,7 @@ const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar: vscode.StatusBarItem | null, conflictPetViewProvider: ConflictPetViewProvider | null) {
     const terminal = getTerminal();
     terminal.show();
-    terminal.sendText('Write-Host "git diff --name-only --diff-filter=U" -ForegroundColor Red; git diff --name-only --diff-filter=U');
+    terminal.sendText('git diff --name-only --diff-filter=U');
 
     const conflictedFunctions = await getConflictedFunctions();
 
