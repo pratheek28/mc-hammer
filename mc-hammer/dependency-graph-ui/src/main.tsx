@@ -105,21 +105,22 @@ function RootFlow() {
     setShowQuestion(false);
   };
 
-  if (showQuestion) {
-    return (
-      <Question
-        question={question}
-        options={options}
-        selectedOptionId={selectedOptionId}
-        expandedOptionId={expandedOptionId}
-        onSelectOption={setSelectedOptionId}
-        onToggleMore={(optionId) => setExpandedOptionId((prev) => (prev === optionId ? null : optionId))}
-        onConfirm={handleConfirm}
-      />
-    );
-  }
-
-  return <App />;
+  return (
+    <>
+      <App />
+      {showQuestion && (
+        <Question
+          question={question}
+          options={options}
+          selectedOptionId={selectedOptionId}
+          expandedOptionId={expandedOptionId}
+          onSelectOption={setSelectedOptionId}
+          onToggleMore={(optionId) => setExpandedOptionId((prev) => (prev === optionId ? null : optionId))}
+          onConfirm={handleConfirm}
+        />
+      )}
+    </>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(<RootFlow />);
