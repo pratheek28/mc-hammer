@@ -10,6 +10,8 @@ let hammerTerminal: vscode.Terminal | undefined;
 let reactTerminal: vscode.Terminal | undefined;
 let uiCommandServer: http.Server | undefined;
 let uiCommandSocketServer: WebSocketServer | undefined;
+let reactStartupPanel: vscode.WebviewPanel | undefined;
+
 
 const UI_COMMAND_PORT = 8766;
 const DEFAULT_PYTHON_EXCLUDE_GLOB = '**/{.git,node_modules,.venv,venv,__pycache__,dist,build}/**';
@@ -32,7 +34,7 @@ const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar: vscode.StatusBarItem | null, conflictPetViewProvider: ConflictPetViewProvider | null) {
     const terminal = getTerminal();
     terminal.show();
-    terminal.sendText('git diff --name-only --diff-filter=U');
+    terminal.sendText('Write-Host "git diff --name-only --diff-filter=U" -ForegroundColor Red; git diff --name-only --diff-filter=U');
 
     const conflictedFunctions = await getConflictedFunctions();
 
@@ -361,8 +363,10 @@ async function getConflictedFunctions(): Promise<Record<string, string[]>> {
 
 function getTerminal(): vscode.Terminal {
     if (!hammerTerminal || hammerTerminal.exitStatus !== undefined) {
-        hammerTerminal = vscode.window.createTerminal('MC Hammer');
-    }
+        hammerTerminal = vscode.window.createTerminal({
+            name: 'MC Hammer',
+            color: new vscode.ThemeColor('terminal.ansiRed')
+        });    }
     return hammerTerminal;
 }
 
@@ -690,7 +694,63 @@ function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction:
     }
 }
 
-function startReactAndPreview(context: vscode.ExtensionContext): void {
+function getStartupGifHtml(webview: vscode.Webview, gifUri: vscode.Uri): string {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta
+        http-equiv="Content-Security-Policy"
+        content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #111;
+        }
+        img {
+            width: min(80vw, 540px);
+            height: auto;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <img src="${gifUri}" alt="MC Hammer warming up..." />
+</body>
+</html>`;
+}
+
+function startReactAndPreview(context: vscode.ExtensionContext, _conflictPetViewProvider?: ConflictPetViewProvider | null): void {
+    if (reactStartupPanel) {
+        reactStartupPanel.dispose();
+        reactStartupPanel = undefined;
+    }
+
+    reactStartupPanel = vscode.window.createWebviewPanel(
+        'mcHammerReactStartup',
+        'MC Hammer',
+        vscode.ViewColumn.Beside,
+        {
+            enableScripts: false,
+            localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')]
+        }
+    );
+
+    const fightGifUri = reactStartupPanel.webview.asWebviewUri(
+        vscode.Uri.joinPath(context.extensionUri, 'media', 'fight.gif')
+    );
+    reactStartupPanel.webview.html = getStartupGifHtml(reactStartupPanel.webview, fightGifUri);
+    reactStartupPanel.onDidDispose(() => {
+        reactStartupPanel = undefined;
+    });
+
     if (!reactTerminal || reactTerminal.exitStatus !== undefined) {
         const dependencyGraphUIPath = path.join(context.extensionPath, 'dependency-graph-ui');
         reactTerminal = vscode.window.createTerminal({
@@ -705,6 +765,8 @@ function startReactAndPreview(context: vscode.ExtensionContext): void {
             'simpleBrowser.show',
             'http://localhost:5173'
         );
+        reactStartupPanel?.dispose();
+        reactStartupPanel = undefined;
     }, 4000);
 }
 
