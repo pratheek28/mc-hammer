@@ -17,10 +17,15 @@ interface FunctionLocation {
 }
 
 const functionLocationByLabel: Record<string, FunctionLocation> = {};
+import { send } from 'process';
+import { ConflictPetViewProvider } from './conflictPetView';
+
+let conflictStatusBar: vscode.StatusBarItem | null = null;
+let conflictPetViewProvider: ConflictPetViewProvider | null = null;
 
 const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 
-async function buttonClicked(context: vscode.ExtensionContext) {
+async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar: vscode.StatusBarItem | null, conflictPetViewProvider: ConflictPetViewProvider | null) {
     const terminal = getTerminal();
     terminal.show();
     terminal.sendText('git diff --name-only --diff-filter=U');
@@ -28,9 +33,21 @@ async function buttonClicked(context: vscode.ExtensionContext) {
     const conflictedFunctions = await getConflictedFunctions();
 
     if (Object.keys(conflictedFunctions).length === 0) {
+		if (conflictStatusBar) {
+			conflictStatusBar.color = new vscode.ThemeColor('statusBar.debuggingForeground');
+			conflictStatusBar.text = '$(check) 🔨 No Merge Conflicts';
+			conflictStatusBar.backgroundColor = undefined;
+		}
         vscode.window.showInformationMessage('No merge conflicts detected in Python files.');
+		if (conflictPetViewProvider) {conflictPetViewProvider.setConflictState(false);}
         return;
     }
+
+	if (conflictStatusBar) {
+		conflictStatusBar.text = '$(warning) 🔨 Merge Conflict Detected';
+		conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+	}
+	if (conflictPetViewProvider) {conflictPetViewProvider.setConflictState(true);}
 
     vscode.window.showInformationMessage(
         `MC Hammer found conflicts in: ${Object.keys(conflictedFunctions).join(', ')}`
@@ -551,43 +568,66 @@ export async function runApprovedCommand(context: vscode.ExtensionContext, pwd: 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "mc-hammer" is now active!');
 
-    const conflictStatusBar = vscode.window.createStatusBarItem(
+    conflictStatusBar = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left,
         100
     );
-    conflictStatusBar.text = '🔨 MC Hammer: Merge Conflict Detected';
-    conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    conflictStatusBar.text = '$(check) 🔨 No Merge Conflicts';
+    conflictStatusBar.backgroundColor = undefined;
     conflictStatusBar.command = 'mc-hammer.buttonClicked';
     conflictStatusBar.tooltip = 'Click to run MC Hammer on merge conflicts';
-    conflictStatusBar.hide();
+    conflictStatusBar.show();
     context.subscriptions.push(conflictStatusBar);
 
-    const watcher = vscode.workspace.createFileSystemWatcher('**/*.py');
-    watcher.onDidChange(async (uri) => {
-        const doc = await vscode.workspace.openTextDocument(uri);
-        if (doc.getText().includes('<<<<<<<')) {
-            conflictStatusBar.show();
-            vscode.window.showInformationMessage(
-                `MC Hammer detected a merge conflict in ${uri.fsPath}`
+    conflictPetViewProvider = new ConflictPetViewProvider(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            ConflictPetViewProvider.viewType,
+            conflictPetViewProvider,
+        ),
+    );
+    conflictPetViewProvider.setConflictState(false);
+
+    // VS Code Git API
+    const gitExtension = vscode.extensions.getExtension('vscode.git')?.exports;
+    if (gitExtension) {
+        const git = gitExtension.getAPI(1);
+
+        const attachToRepo = (repo: any) => {
+            context.subscriptions.push(
+                repo.state.onDidChange(() => {
+                    const hasConflict = repo.state.mergeChanges.length > 0;
+
+                    if (hasConflict) {
+                        if (conflictStatusBar) {
+                            conflictStatusBar.text = '$(warning) 🔨 Merge Conflict Detected';
+                            conflictStatusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+                        }
+                        if (conflictPetViewProvider) { conflictPetViewProvider.setConflictState(true); }
+                    } else {
+                        if (conflictStatusBar) {
+                            conflictStatusBar.text = '$(check) 🔨 No Merge Conflicts';
+                            conflictStatusBar.backgroundColor = undefined;
+                        }
+                        if (conflictPetViewProvider) { conflictPetViewProvider.setConflictState(false); }
+                    }
+                })
             );
-        } else {
-            conflictStatusBar.hide();
-        }
-    });
-    context.subscriptions.push(watcher);
+        };
 
-    const disposable = vscode.commands.registerCommand('mc-hammer.helloWorld', () => {
-        vscode.window.showInformationMessage('Hello! from mc-hammer!');
-    });
+        git.repositories.forEach(attachToRepo);
+        context.subscriptions.push(git.onDidOpenRepository(attachToRepo));
+    } else {
+        vscode.window.showErrorMessage('MC Hammer: Git extension not available.');
+    }
 
-    const hammerButton = vscode.commands.registerCommand('mc-hammer.buttonClicked', () => {
-        buttonClicked(context).catch(err => {
-            vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
-        });
-    });
-
-    context.subscriptions.push(disposable);
-    context.subscriptions.push(hammerButton);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('mc-hammer.buttonClicked', () => {
+            buttonClicked(context, conflictStatusBar, conflictPetViewProvider).catch(err => {
+                vscode.window.showErrorMessage(`MC Hammer error: ${err.message}`);
+            });
+        })
+    );
 
     const buildTestRunnerButton = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left,
