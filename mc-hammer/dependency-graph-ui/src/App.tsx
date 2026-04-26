@@ -1,4 +1,4 @@
-import ReactFlow, { MiniMap, Controls, Background, MarkerType } from "reactflow";
+import ReactFlow, { MiniMap, Controls, Background } from "reactflow";
 import "reactflow/dist/style.css";
 import "./App.css";
 import { useGraphSocket } from './useGraphSocket';
@@ -72,7 +72,7 @@ export default function App() {
         <span>Nodes: {nodes.length}</span>
         <span>Edges: {edges.length}</span>
       </div>
-      <ReactFlow nodes={styledNodes} edges={styledEdges} fitView onNodeClick={handleNodeClick}>
+      <ReactFlow nodes={nodes} edges={edges} fitView>
         <MiniMap />
         <Controls />
         <Background />
