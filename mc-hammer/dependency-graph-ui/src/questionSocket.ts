@@ -47,6 +47,7 @@ async function fetchRemoteAndCurr(): Promise<{ remote: string; curr: string; fil
       const local = typeof contextPayload.local === "string" ? contextPayload.local : "";
       const curr = typeof contextPayload.curr === "string" ? contextPayload.curr : local;
       const file = typeof contextPayload.file === "string" ? contextPayload.file : "";
+      console.log("file", file);
       if (remote || curr || file) {
         return { remote, curr, file };
       }
