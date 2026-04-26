@@ -1,6 +1,7 @@
 import asyncio
 import websockets
 from websockets.sync.client import connect
+from websockets.exceptions import ConnectionClosed
 from collections import deque
 from pathlib import Path
 import json
@@ -20,10 +21,13 @@ MAX_AMBIGUOUS_CALLEE_LINKS = 8
 LATEST_COMMIT_MESSAGE = ""
 LATEST_REMOTE_CONTENT = ""
 LATEST_CURRENT_CONTENT = ""
+LATEST_FILE_CONTENT = ""
 LATEST_GENERATED_TESTCASES = None
 LATEST_GRAPH_DATA = None
 LATEST_GENERATE_TESTS_CONTEXT = None
+LATEST_GRAPH_TARGET_NODE_ID = None
 EXTERNAL_INTENT_WS_URL = os.environ.get("MC_HAMMER_EXTERNAL_INTENT_WS_URL", "ws://10.30.197.121:8000/generate-intent")
+GRAPH_SOCKET_MAX_NODES = 9
 
 
 def _parse_conflicted_functions(value) -> dict[str, list[str]]:
@@ -557,10 +561,73 @@ def to_react_flow(G: nx.DiGraph) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+def _select_connected_visualization_slice(
+    graph_data: dict,
+    max_nodes: int,
+    preferred_node_id: str | None,
+) -> tuple[list[dict], list[dict]]:
+    all_nodes = graph_data.get("nodes", [])
+    all_edges = graph_data.get("edges", [])
+    if len(all_nodes) <= max_nodes:
+        return all_nodes, all_edges
+
+    node_by_id = {node.get("id"): node for node in all_nodes if node.get("id")}
+    adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_by_id}
+    degree: dict[str, int] = {node_id: 0 for node_id in node_by_id}
+
+    for edge in all_edges:
+        source = edge.get("source")
+        target = edge.get("target")
+        if source in node_by_id and target in node_by_id:
+            adjacency[source].add(target)
+            adjacency[target].add(source)
+            degree[source] += 1
+            degree[target] += 1
+
+    root = preferred_node_id if preferred_node_id in node_by_id else None
+    if root is None and degree:
+        root = max(degree, key=lambda node_id: degree[node_id])
+    if root is None:
+        return all_nodes[:max_nodes], []
+
+    selected: list[str] = [root]
+    selected_set = {root}
+
+    while len(selected) < max_nodes:
+        frontier: list[str] = []
+        for node_id in selected:
+            frontier.extend(
+                neighbor
+                for neighbor in adjacency.get(node_id, set())
+                if neighbor not in selected_set
+            )
+
+        if frontier:
+            next_node = max(set(frontier), key=lambda node_id: degree.get(node_id, 0))
+            selected.append(next_node)
+            selected_set.add(next_node)
+            continue
+
+        remaining = [node_id for node_id in node_by_id if node_id not in selected_set]
+        if not remaining:
+            break
+        next_node = max(remaining, key=lambda node_id: degree.get(node_id, 0))
+        selected.append(next_node)
+        selected_set.add(next_node)
+
+    ordered_nodes = [node_by_id[node_id] for node_id in selected if node_id in node_by_id]
+    selected_edges = [
+        edge
+        for edge in all_edges
+        if edge.get("source") in selected_set and edge.get("target") in selected_set
+    ]
+    return ordered_nodes, selected_edges
+
+
 
 
 async def handler(websocket):
-    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_GENERATED_TESTCASES, LATEST_GRAPH_DATA, LATEST_GENERATE_TESTS_CONTEXT
+    global LATEST_COMMIT_MESSAGE, LATEST_REMOTE_CONTENT, LATEST_CURRENT_CONTENT, LATEST_FILE_CONTENT, LATEST_GENERATED_TESTCASES, LATEST_GRAPH_DATA, LATEST_GENERATE_TESTS_CONTEXT, LATEST_GRAPH_TARGET_NODE_ID
     payload_raw = await websocket.recv()
     direct_only = True
     pwd = ""
@@ -570,6 +637,7 @@ async def handler(websocket):
     curr = ""
     remote = ""
     commit = ""
+    file = ""
     print(f"Received payload: {payload_raw}")
 
     # Backward compatible:
@@ -597,6 +665,7 @@ async def handler(websocket):
         # print(f"Remote: {remote}")
         commit = payload.get("commit", payload.get("tcommit", ""))
         # print(f"Commit: {commit}")
+        file = payload.get("file", payload.get("tfile", ""))
         direct_only = bool(payload.get("direct_only", payload.get("directOnly", direct_only)))
         # print(f"Direct only: {direct_only}")
     elif isinstance(payload, str):
@@ -605,6 +674,7 @@ async def handler(websocket):
     LATEST_CURRENT_CONTENT = curr
     LATEST_REMOTE_CONTENT = remote
     LATEST_COMMIT_MESSAGE = commit
+    LATEST_FILE_CONTENT = file
 
     await websocket.send(json.dumps({"type": "ack", "message": "Building graph..."}))
 
@@ -643,6 +713,7 @@ async def handler(websocket):
         T = await asyncio.to_thread(get_subgraph, G, target, direct_only)
         graph_data = await asyncio.to_thread(to_react_flow, T)
         LATEST_GRAPH_DATA = graph_data
+        LATEST_GRAPH_TARGET_NODE_ID = str(target)
         ancestors = nx.ancestors(G, target)
         LATEST_GENERATE_TESTS_CONTEXT = await asyncio.to_thread(
             _build_generate_tests_context,
@@ -683,8 +754,11 @@ async def react_flow_server(websocket):
         await websocket.send(json.dumps({"type": "error", "message": graph_data["error"]}))
         return
 
-    nodes = graph_data["nodes"]
-    edges = graph_data["edges"]
+    nodes, edges = _select_connected_visualization_slice(
+        graph_data,
+        GRAPH_SOCKET_MAX_NODES,
+        LATEST_GRAPH_TARGET_NODE_ID,
+    )
 
     await websocket.send(json.dumps({"type": "start", "nodeCount": len(nodes), "edgeCount": len(edges)}))
 
@@ -722,6 +796,7 @@ async def question_context_server(websocket):
                 "remote": LATEST_REMOTE_CONTENT,
                 "local": LATEST_CURRENT_CONTENT,
                 "curr": LATEST_CURRENT_CONTENT,
+                "file": LATEST_FILE_CONTENT,
             }
         )
     )
@@ -819,10 +894,16 @@ def _forward_payload_to_external_intent(payload: dict) -> dict:
 async def graph_client_relay_server(websocket):
     try:
         raw_payload = await websocket.recv()
+    except ConnectionClosed as exc:
+        print(f"[relay] Graph relay client disconnected before payload was read: {exc}")
+        return
     except Exception as exc:
         message = f"Failed to receive relay payload: {exc}"
         print(f"[relay] {message}")
-        await websocket.send(json.dumps({"type": "relay-result", "ok": False, "error": message}))
+        try:
+            await websocket.send(json.dumps({"type": "relay-result", "ok": False, "error": message}))
+        except ConnectionClosed:
+            print("[relay] Graph relay client disconnected before receive error could be sent")
         return
 
     payload = raw_payload
@@ -837,7 +918,10 @@ async def graph_client_relay_server(websocket):
 
     print(f"[relay] Received graph client payload: {payload}")
     relay_result = await asyncio.to_thread(_forward_payload_to_external_intent, payload)
-    await websocket.send(json.dumps({"type": "relay-result", **relay_result}))
+    try:
+        await websocket.send(json.dumps({"type": "relay-result", **relay_result}))
+    except ConnectionClosed as exc:
+        print(f"[relay] Graph relay client disconnected before relay result could be sent: {exc}")
 
 async def main():
     async with websockets.serve(handler, "127.0.0.1", 8765), \
