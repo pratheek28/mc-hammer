@@ -24,8 +24,8 @@ export default function Question({
   onConfirm,
 }: QuestionProps) {
   return (
-    <div className="question-overlay" role="dialog" aria-label="Choose conflict resolution">
-      <div className="resolution-modal overlay-modal">
+    <div className="question-screen" role="main" aria-label="Choose conflict resolution">
+      <div className="resolution-modal">
         <h2 className="resolution-title">{question}</h2>
         <div className="resolution-options">
           {options.map((option) => {
