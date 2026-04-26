@@ -36,7 +36,7 @@ export default function Root() {
 }
 
 function GateQuestion({ onConfirmYes }: { onConfirmYes: () => void }) {
-  const { question } = useQuestionSocket("ws://127.0.0.1:8000");
+  const { question, sendChoice } = useQuestionSocket("ws://10.30.197.121:8000");
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [expandedOptionId, setExpandedOptionId] = useState<string | null>(null);
 
@@ -65,6 +65,13 @@ function GateQuestion({ onConfirmYes }: { onConfirmYes: () => void }) {
 
   const handleConfirm = () => {
     const selectedOption = options.find((option) => option.id === selectedOptionId);
+    if (selectedOption) {
+      sendChoice({
+        id: selectedOption.id,
+        summary: selectedOption.summary,
+        details: selectedOption.details,
+      });
+    }
     const selectedSummary = selectedOption?.summary.trim().toLowerCase() ?? "";
     const isYes = selectedOptionId === YES_OPTION_ID || selectedSummary.startsWith("yes");
     if (isYes) {

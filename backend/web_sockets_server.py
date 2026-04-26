@@ -411,7 +411,7 @@ def get_subgraph(G: nx.DiGraph, node: str, direct_only: bool = False) -> nx.DiGr
                 if nx.has_path(G, target, node):
                     T.add_edge(source, target)\
                         
-    send_generate_tests_request(node, ancestors)
+    #send_generate_tests_request(node, ancestors)
     # send_generate_merge_request(node, ancestors)
     # send_generate_feedback_request(node, ancestors)
     return T

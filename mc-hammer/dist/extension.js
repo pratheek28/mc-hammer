@@ -128,6 +128,7 @@ var DEFAULT_PYTHON_EXCLUDE_GLOB = "**/{.git,node_modules,.venv,venv,__pycache__,
 var functionLocationByLabel = {};
 var conflictStatusBar = null;
 var conflictPetViewProvider = null;
+var latestTargetFunctionFile = null;
 var socket = new WebSocket("ws://127.0.0.1:8765");
 async function buttonClicked(context, conflictStatusBar2, conflictPetViewProvider2) {
   const terminal = getTerminal();
@@ -168,6 +169,7 @@ async function buttonClicked(context, conflictStatusBar2, conflictPetViewProvide
     getCurrentFileContent(workspacePath, targetFunctionFile),
     getLatestMainCommitMessage(workspacePath)
   ]);
+  latestTargetFunctionFile = targetFunctionFile;
   if (!remote || !curr || !commit) {
     vscode2.window.showErrorMessage("MC Hammer: Could not retrieve all required data. Aborting send.");
     return;
@@ -221,7 +223,35 @@ function startUiCommandServer(context) {
   }
   uiCommandServer = http.createServer((req, res) => {
     const requestUrl = req.url ? new URL(req.url, `http://127.0.0.1:${UI_COMMAND_PORT}`) : null;
-    if (!requestUrl || req.method !== "GET" || requestUrl.pathname !== "/open-function") {
+    if (!requestUrl || req.method !== "GET") {
+      res.statusCode = 404;
+      res.end("Not found");
+      return;
+    }
+    if (requestUrl.pathname === "/question-context") {
+      const workspacePath = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspacePath || !latestTargetFunctionFile) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "No target file context available yet." }));
+        return;
+      }
+      Promise.all([
+        getRemoteFileContent(workspacePath, latestTargetFunctionFile),
+        getCurrentFileContent(workspacePath, latestTargetFunctionFile)
+      ]).then(([remote, curr]) => {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ remote, curr }));
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: message }));
+      });
+      return;
+    }
+    if (requestUrl.pathname !== "/open-function") {
       res.statusCode = 404;
       res.end("Not found");
       return;

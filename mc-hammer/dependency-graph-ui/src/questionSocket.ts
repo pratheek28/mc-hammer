@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Status = "connecting" | "connected" | "receiving" | "done" | "error" | "disconnected";
 
@@ -97,9 +97,11 @@ function normalizePayload(msg: any): MCQPayload | null {
 export function useQuestionSocket(url: string) {
   const [question, setQuestion] = useState<MCQPayload | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
+  const wsRef = useRef<WebSocket | null>(null);
   
   useEffect(() => {
     const ws = new WebSocket(url);
+    wsRef.current = ws;
 
     ws.onopen = () => {
       setStatus("connected");
@@ -150,8 +152,30 @@ export function useQuestionSocket(url: string) {
     ws.onerror = () => setStatus("error");
     ws.onclose = () => setStatus("disconnected");
 
-    return () => ws.close();
+    return () => {
+      wsRef.current = null;
+      ws.close();
+    };
   }, [url]);
 
-  return { question, status };
+  const sendChoice = useCallback((choice: { id?: string; summary?: string; details?: string } | string) => {
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    if (typeof choice === "string") {
+      socket.send(choice);
+      return;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "choice",
+        payload: choice,
+      })
+    );
+  }, []);
+
+  return { question, status, sendChoice };
 }
