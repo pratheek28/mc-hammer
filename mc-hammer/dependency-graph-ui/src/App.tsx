@@ -3,6 +3,7 @@ import "reactflow/dist/style.css";
 import "./App.css";
 import { useGraphSocket } from './useGraphSocket';
 import { useCallback, useMemo } from "react";
+import { sendBackendUiCommand } from "./backendCommandSocket";
 
 export default function App() {
   const { nodes, edges, status } = useGraphSocket("ws://127.0.0.1:8000");
@@ -50,9 +51,16 @@ export default function App() {
     const label = typeof node.data?.label === "string" && node.data.label.trim()
       ? node.data.label.trim()
       : node.id;
-    const encodedLabel = encodeURIComponent(label);
 
-    fetch(`ws://127.0.0.1:8766/open-function?label=${encodedLabel}`).catch((error) => {
+    sendBackendUiCommand<{ ok?: boolean; error?: unknown }>({
+      type: "open-function",
+      label,
+    }).then((response) => {
+      if (!response?.ok) {
+        const message = typeof response?.error === "string" ? response.error : "Unknown error";
+        console.error("Failed to request function open:", message);
+      }
+    }).catch((error) => {
       console.error("Failed to request function open:", error);
     });
   }, []);

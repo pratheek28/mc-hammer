@@ -68,6 +68,11 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1"
   },
-  "extensionDependencies": ["vscode.git"]
-
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "dependencies": {
+    "@types/ws": "^8.18.1",
+    "ws": "^8.20.0"
+  }
 }

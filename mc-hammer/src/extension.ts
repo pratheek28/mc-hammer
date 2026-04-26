@@ -3,10 +3,13 @@ import * as cp from 'child_process';
 import * as path from 'path';
 import { promises as fs } from 'fs';
 import * as http from 'http';
+import { WebSocketServer } from 'ws';
+import type { WebSocket as UiCommandWebSocket } from 'ws';
 
 let hammerTerminal: vscode.Terminal | undefined;
 let reactTerminal: vscode.Terminal | undefined;
 let uiCommandServer: http.Server | undefined;
+let uiCommandSocketServer: WebSocketServer | undefined;
 
 const UI_COMMAND_PORT = 8766;
 const DEFAULT_PYTHON_EXCLUDE_GLOB = '**/{.git,node_modules,.venv,venv,__pycache__,dist,build}/**';
@@ -139,30 +142,10 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
             return;
         }
 
-        if (requestUrl.pathname === '/question-context') {
-            const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-            if (!workspacePath || !latestTargetFunctionFile) {
-                res.statusCode = 404;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ error: 'No target file context available yet.' }));
-                return;
-            }
-
-            Promise.all([
-                getRemoteFileContent(workspacePath, latestTargetFunctionFile),
-                getCurrentFileContent(workspacePath, latestTargetFunctionFile),
-            ])
-                .then(([remote, curr]) => {
-                    res.statusCode = 200;
-                    res.setHeader('Content-Type', 'application/json');
-                    res.end(JSON.stringify({ remote, curr }));
-                })
-                .catch((error) => {
-                    const message = error instanceof Error ? error.message : String(error);
-                    res.statusCode = 500;
-                    res.setHeader('Content-Type', 'application/json');
-                    res.end(JSON.stringify({ error: message }));
-                });
+        if (requestUrl.pathname === '/question-context' || requestUrl.pathname === '/open-function') {
+            res.statusCode = 426;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'Use WebSocket endpoint ws://127.0.0.1:8766/ui-commands' }));
             return;
         }
 
@@ -198,12 +181,84 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
         res.end(JSON.stringify({ ok: true }));
     });
 
+    uiCommandSocketServer = new WebSocketServer({ server: uiCommandServer, path: '/ui-commands' });
+    uiCommandSocketServer.on('connection', (client: UiCommandWebSocket) => {
+        client.on('message', async (rawMessage) => {
+            let parsedMessage: unknown;
+            try {
+                parsedMessage = JSON.parse(rawMessage.toString());
+            } catch {
+                client.send(JSON.stringify({ ok: false, type: 'error', error: 'Invalid JSON message.' }));
+                return;
+            }
+
+            const command = typeof parsedMessage === 'object' && parsedMessage !== null
+                ? parsedMessage as Record<string, unknown>
+                : null;
+            const type = typeof command?.type === 'string' ? command.type : '';
+
+            if (type === 'question-context') {
+                const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                if (!workspacePath || !latestTargetFunctionFile) {
+                    client.send(JSON.stringify({
+                        ok: false,
+                        type: 'question-context',
+                        error: 'No target file context available yet.'
+                    }));
+                    return;
+                }
+
+                try {
+                    const [remote, curr] = await Promise.all([
+                        getRemoteFileContent(workspacePath, latestTargetFunctionFile),
+                        getCurrentFileContent(workspacePath, latestTargetFunctionFile),
+                    ]);
+                    client.send(JSON.stringify({ ok: true, type: 'question-context', remote, curr }));
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    client.send(JSON.stringify({ ok: false, type: 'question-context', error: message }));
+                }
+                return;
+            }
+
+            if (type === 'open-function') {
+                const label = typeof command?.label === 'string' ? command.label.trim() : '';
+                if (!label) {
+                    client.send(JSON.stringify({ ok: false, type: 'open-function', error: 'Missing label' }));
+                    return;
+                }
+
+                const location = functionLocationByLabel[label];
+                if (!location) {
+                    client.send(JSON.stringify({ ok: false, type: 'open-function', error: 'Function label not found' }));
+                    return;
+                }
+
+                try {
+                    await openFunctionLocation(location);
+                    client.send(JSON.stringify({ ok: true, type: 'open-function' }));
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    client.send(JSON.stringify({ ok: false, type: 'open-function', error: message }));
+                    vscode.window.showErrorMessage(`MC Hammer: Unable to open function "${label}": ${message}`);
+                }
+                return;
+            }
+
+            client.send(JSON.stringify({ ok: false, type: 'error', error: 'Unsupported command type.' }));
+        });
+    });
+
     uiCommandServer.listen(UI_COMMAND_PORT, '127.0.0.1', () => {
         console.log(`[MC Hammer] UI command server listening on ${UI_COMMAND_PORT}`);
     });
 
     context.subscriptions.push({
         dispose: () => {
+            if (uiCommandSocketServer) {
+                uiCommandSocketServer.close();
+                uiCommandSocketServer = undefined;
+            }
             if (uiCommandServer) {
                 uiCommandServer.close();
                 uiCommandServer = undefined;
