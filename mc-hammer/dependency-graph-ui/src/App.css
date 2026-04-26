@@ -2,6 +2,14 @@
   background: var(--bg);
 }
 
+/* .status-chase {
+  width: 500px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 10px;
+  pointer-events: none;
+} */
+
 .status-overlay {
   display: inline-flex;
   align-items: center;
