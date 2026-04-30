@@ -28,6 +28,16 @@ LATEST_GENERATE_TESTS_CONTEXT = None
 LATEST_GRAPH_TARGET_NODE_ID = None
 EXTERNAL_INTENT_WS_URL = os.environ.get("MC_HAMMER_EXTERNAL_INTENT_WS_URL", "ws://10.30.197.121:8000/generate-intent")
 GRAPH_SOCKET_MAX_NODES = 9
+GRAPH_SOCKET_REAL_WAIT_MS = 8000
+FALLBACK_GRAPH_NODES = [
+    {"id": "fallback-root", "data": {"label": "merge_entrypoint"}, "position": {"x": 0.0, "y": 0.0}},
+    {"id": "fallback-tests", "data": {"label": "generate_tests"}, "position": {"x": -220.0, "y": 170.0}},
+    {"id": "fallback-merge", "data": {"label": "generate_merge"}, "position": {"x": 220.0, "y": 170.0}},
+]
+FALLBACK_GRAPH_EDGES = [
+    {"id": "fallback-edge-tests", "source": "fallback-root", "target": "fallback-tests", "markerEnd": {"type": "arrowclosed"}},
+    {"id": "fallback-edge-merge", "source": "fallback-root", "target": "fallback-merge", "markerEnd": {"type": "arrowclosed"}},
+]
 
 
 def _parse_conflicted_functions(value) -> dict[str, list[str]]:
@@ -796,23 +806,42 @@ async def handler(websocket):
         )
 
 async def react_flow_server(websocket):
-    try:
-        graph_data = await asyncio.wait_for(graph_queue.get(), timeout=300)
-    except asyncio.TimeoutError:
-        await websocket.send(json.dumps({"type": "error", "message": "Timed out waiting for graph data"}))
-        return
+    graph_data = None
+    while True:
+        try:
+            graph_data = graph_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
 
-    if "error" in graph_data:
-        await websocket.send(json.dumps({"type": "error", "message": graph_data["error"]}))
-        return
+    if graph_data is None:
+        graph_data = LATEST_GRAPH_DATA
 
-    nodes, edges = _select_connected_visualization_slice(
-        graph_data,
-        GRAPH_SOCKET_MAX_NODES,
-        LATEST_GRAPH_TARGET_NODE_ID,
+    if graph_data is None:
+        try:
+            graph_data = await asyncio.wait_for(graph_queue.get(), timeout=GRAPH_SOCKET_REAL_WAIT_MS / 1000)
+        except asyncio.TimeoutError:
+            graph_data = None
+
+    use_fallback = graph_data is None or "error" in graph_data
+    if use_fallback:
+        nodes, edges = FALLBACK_GRAPH_NODES, FALLBACK_GRAPH_EDGES
+    else:
+        nodes, edges = _select_connected_visualization_slice(
+            graph_data,
+            GRAPH_SOCKET_MAX_NODES,
+            LATEST_GRAPH_TARGET_NODE_ID,
+        )
+
+    await websocket.send(
+        json.dumps(
+            {
+                "type": "start",
+                "nodeCount": len(nodes),
+                "edgeCount": len(edges),
+                "graphSource": "fallback" if use_fallback else "live",
+            }
+        )
     )
-
-    await websocket.send(json.dumps({"type": "start", "nodeCount": len(nodes), "edgeCount": len(edges)}))
 
     for node in nodes:
         await websocket.send(json.dumps({"type": "add_node", "node": node}))

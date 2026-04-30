@@ -64,12 +64,12 @@ async function fetchGraphForQuestionOnce(): Promise<Record<string, unknown> | nu
   try {
     return await new Promise((resolve) => {
       const graphSocket = new WebSocket("ws://127.0.0.1:8001");
-      const timeoutId = window.setTimeout(() => {
-        resolve(null);
-        graphSocket.close();
-      }, 1200);
+      let resolved = false;
       const resolveOnce = (value: Record<string, unknown> | null) => {
-        window.clearTimeout(timeoutId);
+        if (resolved) {
+          return;
+        }
+        resolved = true;
         resolve(value);
       };
 
@@ -91,6 +91,10 @@ async function fetchGraphForQuestionOnce(): Promise<Record<string, unknown> | nu
       graphSocket.onerror = () => {
         resolveOnce(null);
         graphSocket.close();
+      };
+
+      graphSocket.onclose = () => {
+        resolveOnce(null);
       };
     });
   } catch {
@@ -250,7 +254,6 @@ function getGenerateMergeUrl(baseUrl: string): string {
 }
 
 function sendGeneratedTestsToExtension(rawPayload: unknown): void {
-  window.dispatchEvent(new CustomEvent("mc-hammer:testcases-received"));
   const uiCommandSocket = new WebSocket("ws://127.0.0.1:8766/ui-commands");
   uiCommandSocket.onopen = () => {
     uiCommandSocket.send(
@@ -260,7 +263,15 @@ function sendGeneratedTestsToExtension(rawPayload: unknown): void {
       })
     );
   };
-  uiCommandSocket.onmessage = () => {
+  uiCommandSocket.onmessage = (event) => {
+    try {
+      const response = JSON.parse(event.data) as { ok?: boolean };
+      if (response?.ok) {
+        window.dispatchEvent(new CustomEvent("mc-hammer:testcases-received"));
+      }
+    } catch {
+      // Ignore malformed ack payloads.
+    }
     uiCommandSocket.close();
   };
   uiCommandSocket.onerror = (error) => {
@@ -321,85 +332,114 @@ function extractMergedFileContent(rawMessage: unknown): string | null {
   return null;
 }
 
-function sendMergedCodeToExtension(mergedFileCode: string): void {
-  const uiCommandSocket = new WebSocket("ws://127.0.0.1:8766/ui-commands");
-  uiCommandSocket.onopen = () => {
-    uiCommandSocket.send(
-      JSON.stringify({
-        type: "apply-merge-resolution",
-        payload: {
-          mergedFileCode,
-          mode: "replace-function",
-        },
-      })
-    );
-  };
-  uiCommandSocket.onmessage = () => {
-    uiCommandSocket.close();
-  };
-  uiCommandSocket.onerror = (error) => {
-    console.error("[questionSocket] Failed to send merged code to extension:", error);
-  };
-  uiCommandSocket.onclose = () => {
-    // no-op
-  };
+let pendingMergeCode: string | null = null;
+
+export function hasPendingMergeCode(): boolean {
+  return typeof pendingMergeCode === "string" && pendingMergeCode.trim().length > 0;
 }
 
-function openGenerateMergeSocket(baseUrl: string): void {
-  const generateMergeSocket = new WebSocket(getGenerateMergeUrl(baseUrl));
+export function consumePendingMergeCode(): string | null {
+  if (!hasPendingMergeCode()) {
+    return null;
+  }
+  const mergeCode = pendingMergeCode;
+  pendingMergeCode = null;
+  return mergeCode;
+}
+
+function openGenerateMergeSocket(baseUrl: string, mergePayload: Record<string, unknown>): void {
+  console.log("openGenerateMergeSocket", baseUrl, mergePayload);
+  const MERGE_MAX_WAIT_MS = 10 * 60 * 1000;
+  const MERGE_RECONNECT_DELAY_MS = 2000;
+  const MERGE_KEEPALIVE_INTERVAL_MS = 25000;
+  const mergeUrl = getGenerateMergeUrl(baseUrl);
+  const startedAt = Date.now();
   let mergeResolved = false;
+  let reconnectTimer: number | null = null;
+  let keepAliveTimer: number | null = null;
 
-  generateMergeSocket.onmessage = (event) => {
-    console.log("[questionSocket] Received generate-merge payload:", event.data);
-    let parsedMessage: unknown = event.data;
-    if (typeof event.data === "string") {
-      try {
-        parsedMessage = JSON.parse(event.data);
-      } catch {
-        // Keep original string payload as-is.
-      }
+  const clearTimers = () => {
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
+    if (keepAliveTimer !== null) {
+      window.clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
+    }
+  };
 
-    const messageRecord =
-      parsedMessage && typeof parsedMessage === "object"
-        ? (parsedMessage as Record<string, unknown>)
-        : null;
-    const messageType = typeof messageRecord?.type === "string" ? messageRecord.type : "";
-    if (messageType === "error") {
-      console.error("[questionSocket] generate-merge backend returned error:", parsedMessage);
-      generateMergeSocket.close();
+  const startSocket = () => {
+    if (mergeResolved) {
+      return;
+    }
+    if (Date.now() - startedAt > MERGE_MAX_WAIT_MS) {
+      console.error("[questionSocket] generate-merge timed out waiting for merged file payload");
       return;
     }
 
-    const mergedFileCode = extractMergedFileContent(parsedMessage);
-    if (mergedFileCode) {
-      mergeResolved = true;
-      console.log("[questionSocket] Final merged file received from /generate-merge:", mergedFileCode);
-      window.alert("Merge conflict has been resolved.");
-      const shouldApply = window.confirm(
-        "Apply the generated merge resolution? This will replace the target function with the fixed code."
-      );
-      if (shouldApply) {
-        sendMergedCodeToExtension(mergedFileCode);
+    const generateMergeSocket = new WebSocket(mergeUrl);
+
+    generateMergeSocket.onopen = () => {
+      const sent = sendIfOpen(generateMergeSocket, JSON.stringify(mergePayload));
+      if (!sent) {
+        return;
       }
-      generateMergeSocket.close();
-      return;
-    }
+      keepAliveTimer = window.setInterval(() => {
+        if (generateMergeSocket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        generateMergeSocket.send(JSON.stringify({ type: "ping" }));
+      }, MERGE_KEEPALIVE_INTERVAL_MS);
+    };
 
-    if (messageType === "done") {
-      generateMergeSocket.close();
-    }
+    generateMergeSocket.onmessage = (event) => {
+      console.log("[questionSocket] Received generate-merge payload:", event.data);
+      let parsedMessage: unknown = event.data;
+      if (typeof event.data === "string") {
+        try {
+          parsedMessage = JSON.parse(event.data);
+        } catch {
+          // Keep original string payload as-is.
+        }
+      }
+
+      const messageRecord =
+        parsedMessage && typeof parsedMessage === "object"
+          ? (parsedMessage as Record<string, unknown>)
+          : null;
+      const messageType = typeof messageRecord?.type === "string" ? messageRecord.type : "";
+      if (messageType === "error") {
+        console.error("[questionSocket] generate-merge backend returned error:", parsedMessage);
+        return;
+      }
+
+      const mergedFileCode = extractMergedFileContent(parsedMessage);
+      if (mergedFileCode) {
+        mergeResolved = true;
+        clearTimers();
+        console.log("[questionSocket] Final merged file received from /generate-merge:", mergedFileCode);
+        pendingMergeCode = mergedFileCode;
+        window.dispatchEvent(new CustomEvent("mc-hammer:merge-ready"));
+        generateMergeSocket.close();
+      }
+    };
+
+    generateMergeSocket.onerror = (error) => {
+      console.error("[questionSocket] generate-merge websocket error:", error);
+    };
+
+    generateMergeSocket.onclose = () => {
+      clearTimers();
+      if (mergeResolved) {
+        return;
+      }
+      console.log("[questionSocket] generate-merge socket closed before merge payload, retrying...");
+      reconnectTimer = window.setTimeout(startSocket, MERGE_RECONNECT_DELAY_MS);
+    };
   };
 
-  generateMergeSocket.onerror = (error) => {
-    console.error("[questionSocket] generate-merge websocket error:", error);
-  };
-
-  generateMergeSocket.onclose = () => {
-    if (!mergeResolved) {
-      console.log("[questionSocket] generate-merge socket closed without merge payload");
-    }
-  };
+  startSocket();
 }
 
 export function useQuestionSocket(url: string) {
@@ -491,6 +531,21 @@ export function useQuestionSocket(url: string) {
           intent: userSelection,
         };
         const generateTestsSocket = new WebSocket(getGenerateTestsUrl(url));
+        let latestGenerateTestsResponse: Record<string, unknown> | null = null;
+        let mergeKickedOff = false;
+        const kickOffMerge = () => {
+          if (mergeKickedOff) {
+            return;
+          }
+          mergeKickedOff = true;
+          const generateMergePayload = {
+            ...generateTestsPayload,
+            generated_tests: latestGenerateTestsResponse?.payload ?? latestGenerateTestsResponse,
+          };
+          console.log("[questionSocket] Kicking off generate-merge call");
+          openGenerateMergeSocket(url, generateMergePayload);
+        };
+
         generateTestsSocket.onopen = () => {
           generateTestsSocket.send(JSON.stringify(generateTestsPayload));
         };
@@ -509,22 +564,29 @@ export function useQuestionSocket(url: string) {
           if (messageType === "error") {
             console.error("[questionSocket] generate-tests backend returned error:", parsedMessage);
             generateTestsSocket.close();
+            kickOffMerge();
             return;
           }
 
           if (messageType === "done") {
             generateTestsSocket.close();
+            kickOffMerge();
             return;
           }
 
+          if (parsedMessage && typeof parsedMessage === "object") {
+            latestGenerateTestsResponse = parsedMessage as Record<string, unknown>;
+          }
           sendGeneratedTestsToExtension(parsedMessage?.payload ?? parsedMessage);
+          kickOffMerge();
         };
         generateTestsSocket.onerror = (error) => {
           console.error("[questionSocket] generate-tests websocket error:", error);
+          kickOffMerge();
         };
         generateTestsSocket.onclose = () => {
           console.log("[questionSocket] generate-tests socket closed");
-          openGenerateMergeSocket(url);
+          kickOffMerge();
         };
       })
       .catch((error) => {

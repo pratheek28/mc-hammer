@@ -68,6 +68,22 @@ async function applyMergeResolution(mergedFileCode: string): Promise<void> {
     vscode.window.showInformationMessage(`MC Hammer replaced file with merged output: ${resolvedPath}`);
 }
 
+function replacePythonFunctionInFile(fileContent: string, functionName: string, replacementFunction: string): string {
+    const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+        `(^|\\n)([ \\t]*)def[ \\t]+${escapedName}\\s*\\([^\\)]*\\)\\s*(?:->[^\\n:]*)?:\\n(?:\\2[ \\t]+.*\\n|\\2\\n|\\n)*`,
+        'm'
+    );
+    const match = fileContent.match(pattern);
+    if (!match) {
+        throw new Error(`Function "${functionName}" was not found in target file.`);
+    }
+
+    const leading = match[1] ?? '\n';
+    const normalizedReplacement = replacementFunction.trimEnd();
+    return fileContent.replace(pattern, `${leading}${normalizedReplacement}\n`);
+}
+
 const socket: WebSocket = new WebSocket("ws://127.0.0.1:8765");
 
 async function buttonClicked(context: vscode.ExtensionContext, conflictStatusBar: vscode.StatusBarItem | null, conflictPetViewProvider: ConflictPetViewProvider | null) {
@@ -267,14 +283,36 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
 
             if (type === 'open-function') {
                 const label = typeof command?.label === 'string' ? command.label.trim() : '';
-                if (!label) {
-                    client.send(JSON.stringify({ ok: false, type: 'open-function', error: 'Missing label' }));
-                    return;
+                const rawFilePath = typeof command?.filePath === 'string' ? command.filePath.trim() : '';
+                const rawLine = typeof command?.line === 'number' ? command.line : Number(command?.line);
+
+                let location: FunctionLocation | undefined;
+
+                if (rawFilePath && Number.isFinite(rawLine) && rawLine > 0) {
+                    const resolvedFilePath = path.isAbsolute(rawFilePath)
+                        ? rawFilePath
+                        : (() => {
+                            const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                            return workspacePath ? path.join(workspacePath, rawFilePath) : rawFilePath;
+                        })();
+                    location = { filePath: resolvedFilePath, line: Math.floor(rawLine) };
+                } else if (label) {
+                    location = functionLocationByLabel[label];
                 }
 
-                const location = functionLocationByLabel[label];
                 if (!location) {
-                    client.send(JSON.stringify({ ok: false, type: 'open-function', error: 'Function label not found' }));
+                    if (label && Object.keys(functionLocationByLabel).length === 0) {
+                        try {
+                            await buildFunctionLocationDictionary();
+                            location = functionLocationByLabel[label];
+                        } catch {
+                            // Best-effort: ignore and fall through to error response.
+                        }
+                    }
+                }
+
+                if (!location) {
+                    client.send(JSON.stringify({ ok: false, type: 'open-function', error: 'Function location not found' }));
                     return;
                 }
 
@@ -284,7 +322,7 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     client.send(JSON.stringify({ ok: false, type: 'open-function', error: message }));
-                    vscode.window.showErrorMessage(`MC Hammer: Unable to open function "${label}": ${message}`);
+                    vscode.window.showErrorMessage(`MC Hammer: Unable to open function "${label || rawFilePath}": ${message}`);
                 }
                 return;
             }
@@ -307,14 +345,30 @@ function startUiCommandServer(context: vscode.ExtensionContext): void {
                     : typeof payload?.content === 'string'
                         ? payload.content
                         : '';
+                const mode = typeof payload?.mode === 'string' ? payload.mode : '';
+                const targetFilePath = typeof payload?.targetFilePath === 'string' ? payload.targetFilePath.trim() : '';
+                const functionName = typeof payload?.functionName === 'string' ? payload.functionName.trim() : '';
+                const replacementFunction = typeof payload?.replacementFunction === 'string' ? payload.replacementFunction : '';
 
-                if (!mergedFileCode.trim()) {
+                if (mode !== 'replace-function' && !mergedFileCode.trim()) {
                     client.send(JSON.stringify({ ok: false, type: 'apply-merge-resolution', error: 'Missing mergedFileCode payload.' }));
                     return;
                 }
 
                 try {
-                    await applyMergeResolution(mergedFileCode);
+                    if (mode === 'replace-function') {
+                        if (!targetFilePath || !functionName || !replacementFunction.trim()) {
+                            throw new Error('replace-function mode requires targetFilePath, functionName, and replacementFunction.');
+                        }
+                        const existingContent = await fs.readFile(targetFilePath, 'utf8');
+                        const updatedContent = replacePythonFunctionInFile(existingContent, functionName, replacementFunction);
+                        await fs.writeFile(targetFilePath, updatedContent, 'utf8');
+                        const doc = await vscode.workspace.openTextDocument(targetFilePath);
+                        await vscode.window.showTextDocument(doc, { preview: false });
+                        vscode.window.showInformationMessage(`MC Hammer merged function "${functionName}" in ${targetFilePath}`);
+                    } else {
+                        await applyMergeResolution(mergedFileCode);
+                    }
                     client.send(JSON.stringify({ ok: true, type: 'apply-merge-resolution' }));
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
@@ -913,6 +967,39 @@ function buildPythonTestRunner(testCases: GeneratedTestCase[]): string {
     ].join('\n');
 }
 
+async function runHardcodedTestRunnerAndWait(workspacePath: string, hardcodedOutputPath: string): Promise<void> {
+    const candidates: Array<{ command: string; args: string[] }> = [
+        { command: 'python3', args: [hardcodedOutputPath] },
+        { command: 'python', args: [hardcodedOutputPath] },
+    ];
+
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+        try {
+            await new Promise<void>((resolve, reject) => {
+                cp.execFile(
+                    candidate.command,
+                    candidate.args,
+                    { cwd: workspacePath, timeout: 120000 },
+                    (error) => {
+                        if (error) {
+                            reject(error);
+                            return;
+                        }
+                        resolve();
+                    }
+                );
+            });
+            return;
+        } catch (error) {
+            lastError = error;
+        }
+    }
+
+    const message = lastError instanceof Error ? lastError.message : String(lastError ?? 'Unknown error');
+    throw new Error(`Failed to execute hardcoded testcase runner: ${message}`);
+}
+
 function sendToBackend(pwd: string, conflictedFunctions: string, targetFunction: string, curr: string, remote: string, commit: string) {
     const data = JSON.stringify({
         pwd,
@@ -1125,6 +1212,7 @@ export async function testCases(rawPayload: unknown): Promise<void> {
         terminal.show();
         terminal.sendText(`cd ${quoteForShell(workspacePath)}`);
         terminal.sendText(`python3 ${quoteForShell(hardcodedOutputPath)} || python ${quoteForShell(hardcodedOutputPath)}`);
+        await runHardcodedTestRunnerAndWait(workspacePath, hardcodedOutputPath);
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         vscode.window.showErrorMessage(`MC Hammer failed to generate testcase runner: ${message}`);
